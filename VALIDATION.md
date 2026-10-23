@@ -97,7 +97,7 @@ biological ground truth. The earlier watershed/LoG result is documented in
 
 ## Software evidence
 
-All **34 tests pass** in the tested Python 3.12/Linux environment. Tests cover
+All **40 tests pass** in the tested Python 3.12/Linux environment. Tests cover
 known peaks and background noise, explicit profiles, every shipped JSON, default
 profile export, missing distribution metadata, early environment failure,
 production-profile exports with mocked nucleus inference, thresholds, region
@@ -186,3 +186,13 @@ comparisons, preserves the production settings and reports numerator/denominator
 counts plus a fixed baseline Cre group. Four additional tests cover sweep
 behavior and multi-scene aggregation. Higher fractions are not taken as proof
 of more accurate segmentation or positivity thresholds.
+
+## Cellpose second opinion
+
+The optional [Cellpose report](docs/CELLPOSE_COMPARISON.md) records five actual
+CPU model/input variants, their method-agreement statistics and cell-region
+coverage. All use the original ≥3 cutoffs and frozen peak detections. Baseline
+StarDist counts reproduce. A blinded eight-tile review package is prepared;
+expert object-level labels have not been supplied and no accuracy winner is
+claimed. Production masks/settings remain unchanged. Six additional tests
+cover comparison logic and blinded-package behavior.

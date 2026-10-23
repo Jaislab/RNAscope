@@ -1,4 +1,5 @@
 .venv/
+.venv-cellpose/
 __pycache__/
 *.py[cod]
 results*/

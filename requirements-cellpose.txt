@@ -1,0 +1,26 @@
+# Optional isolated Linux CPU environment for legacy nuclei/cyto3 models.
+# Do not install into the production StarDist environment.
+--extra-index-url https://download.pytorch.org/whl/cpu
+cellpose==3.1.1.3
+fastremap==1.21.0
+filelock==3.32.3
+fill_voids==2.1.2
+fsspec==2026.7.0
+imagecodecs==2026.3.6
+Jinja2==3.1.6
+llvmlite==0.44.0
+MarkupSafe==3.0.3
+mpmath==1.3.0
+natsort==8.4.0
+networkx==3.6.1
+numba==0.61.2
+numpy==2.0.2
+opencv-python-headless==4.11.0.86
+roifile==2026.2.10
+scipy==1.18.1
+setuptools==78.1.0
+sympy==1.14.0
+tifffile==2026.4.11
+torch==2.7.1+cpu
+tqdm==4.70.1
+typing_extensions==4.16.0

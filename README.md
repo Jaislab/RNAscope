@@ -148,6 +148,19 @@ Zero denominators are `NA` in CSV and `null` in JSON. Batch percentages use
 summed counts. Images/nuclei are not automatically independent biological
 replicates; group results by animal/sample using the experimental design.
 
+## Optional Cellpose second opinion
+
+The [Cellpose comparison](docs/CELLPOSE_COMPARISON.md) runs the legacy `nuclei`
+and `cyto3` models on the same image, preserving ≥3 puncta and frozen detections.
+It includes DAPI preprocessing controls, Pnoc/DAPI cell-outline estimates,
+per-object disagreements and a blinded annotation template. Cellpose uses a
+separate environment; install/run instructions are in the report.
+
+On the reference image, Pnoc-guided cell estimates link only 20 of the original
+121 Cre-positive objects. These outlines are not validated whole-cell boundaries
+and do not replace the current 2 µm profile. Expert annotations are still needed
+for an accuracy comparison.
+
 ## Verification and audit
 
 To compare RNA-positivity cutoffs and counting radii using an existing complete
@@ -166,7 +179,7 @@ not an accuracy optimum or a change to the production profile.
 python -m unittest discover -s tests -v
 ```
 
-The 34 tests cover software behavior, all shipped profiles, missing version
+The 40 tests cover software behavior, all shipped profiles, missing version
 metadata, explicit profile selection, priority/informational QC separation,
 Cre-endpoint triage, bit-depth saturation, lossless ImageJ masks and production-profile exports with
 mocked nucleus inference. Actual StarDist inference was also executed on
@@ -176,3 +189,5 @@ and outstanding recommendations, and the [changelog](CHANGELOG.md).
 Sweep tests additionally cover independent cutoffs, fixed-group comparisons,
 physical reassignment, excluded-mask blocking, baseline reproduction and
 weighted multi-scene totals.
+Cellpose-comparison tests cover channel ordering, unique instance matching,
+ambiguous cell links and separation of blinded reviewer files from the model key.

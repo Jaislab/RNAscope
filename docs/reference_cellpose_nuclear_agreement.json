@@ -1,0 +1,56 @@
+{
+  "stardist": {
+    "reference_objects": 1554,
+    "query_objects": 1554,
+    "matched_at_iou_threshold": 1554,
+    "reference_unmatched": 0,
+    "query_unmatched": 0,
+    "median_matched_iou": 1.0,
+    "reference_with_multiple_20pct_overlaps": 0,
+    "query_with_multiple_20pct_overlaps": 0
+  },
+  "nuclei_dapi": {
+    "reference_objects": 1554,
+    "query_objects": 409,
+    "matched_at_iou_threshold": 124,
+    "reference_unmatched": 1430,
+    "query_unmatched": 285,
+    "median_matched_iou": 0.569130668652764,
+    "reference_with_multiple_20pct_overlaps": 7,
+    "query_with_multiple_20pct_overlaps": 14,
+    "matched_class_changes_plus2um": 10
+  },
+  "cyto3_dapi": {
+    "reference_objects": 1554,
+    "query_objects": 1032,
+    "matched_at_iou_threshold": 737,
+    "reference_unmatched": 817,
+    "query_unmatched": 295,
+    "median_matched_iou": 0.7340823970037453,
+    "reference_with_multiple_20pct_overlaps": 98,
+    "query_with_multiple_20pct_overlaps": 71,
+    "matched_class_changes_plus2um": 50
+  },
+  "nuclei_dapi_clahe": {
+    "reference_objects": 1554,
+    "query_objects": 756,
+    "matched_at_iou_threshold": 412,
+    "reference_unmatched": 1142,
+    "query_unmatched": 344,
+    "median_matched_iou": 0.6042233933538281,
+    "reference_with_multiple_20pct_overlaps": 7,
+    "query_with_multiple_20pct_overlaps": 33,
+    "matched_class_changes_plus2um": 28
+  },
+  "cyto3_dapi_clahe": {
+    "reference_objects": 1554,
+    "query_objects": 421,
+    "matched_at_iou_threshold": 308,
+    "reference_unmatched": 1246,
+    "query_unmatched": 113,
+    "median_matched_iou": 0.7399046519001676,
+    "reference_with_multiple_20pct_overlaps": 3,
+    "query_with_multiple_20pct_overlaps": 21,
+    "matched_class_changes_plus2um": 29
+  }
+}

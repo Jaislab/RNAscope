@@ -1,0 +1,18 @@
+{
+  "baseline_cre_positive": 121,
+  "mapped_baseline_cre": 20,
+  "unmapped_baseline_cre_unknown": 101,
+  "pnoc_positive_mapped_baseline_cre": 15,
+  "pct_pnoc_among_mapped_baseline_cre": 75.0,
+  "whole_baseline_cre_fraction_bounds_pct": [
+    12.396694214876034,
+    95.86776859504133
+  ],
+  "link_status_counts": {
+    "eligible": 335,
+    "multiple_nuclear_occupants": 49,
+    "no_majority_nucleus": 45,
+    "rejected_reference_nucleus": 6
+  },
+  "interpretation": "Unknown/unmapped objects are not negatives. The mapped subset may be selected by Pnoc-guided segmentation; these percentages are not whole-cohort accuracy estimates."
+}

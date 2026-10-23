@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased: parameter sensitivity utility
+## Unreleased: optional comparison tools
+
+- Add an isolated, pinned Cellpose 3 workflow for the requested `nuclei` and
+  `cyto3` models, with verified source export, model/mask fingerprints and
+  DAPI preprocessing controls; preserve the production StarDist environment.
+- Compare frozen ≥3-peak calls under nuclear masks/2 µm regions and linked
+  Pnoc/DAPI-guided cell estimates. Report missing coverage and ambiguous links.
+- Prepare blinded raw-image/outline review files with a separate model key and
+  empty annotation templates; no expert-label accuracy claims are made.
+- Add six Cellpose-comparison tests; 40 tests pass in total.
 
 - Add `sweep_parameters.py` to reuse complete analysis exports across independent
   gene cutoffs and assignment radii, with baseline reproduction checks and hashes.
@@ -8,7 +17,7 @@
   per-object counts, weighted batch totals and PNG/PDF sensitivity plots.
 - Document 324 settings on the reference section and a five-object Pnoc ≥2
   validation candidate; retain production profiles and all core analysis behavior.
-- Add four sweep tests; 34 tests pass in total.
+- Add four sweep tests; the sensitivity update brought the test total to 34.
 
 ## 0.2.3
 
