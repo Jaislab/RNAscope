@@ -1,0 +1,7 @@
+# Requires Python >=3.12. Validated with Python 3.12.
+czifile==2026.10.14
+numpy==2.3.5
+scipy==1.17.0
+scikit-image==0.26.0
+matplotlib==3.10.8
+tifffile==2026.10.15

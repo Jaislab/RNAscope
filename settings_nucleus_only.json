@@ -1,0 +1,105 @@
+{
+  "channels": {
+    "dapi": {
+      "names": [
+        "DAPI-T4",
+        "DAPI"
+      ],
+      "index": null,
+      "fallback_index": 3
+    },
+    "pnoc": {
+      "names": [
+        "At520-T3",
+        "ATTO 520",
+        "At520"
+      ],
+      "index": null,
+      "fallback_index": 2
+    },
+    "cre": {
+      "names": [
+        "Cy5-T1",
+        "Cy5"
+      ],
+      "index": null,
+      "fallback_index": 0
+    }
+  },
+  "pixel_size_um": null,
+  "assignment": {
+    "expand_um": 0.0
+  },
+  "nuclei": {
+    "method": "stardist",
+    "threshold_method": "li",
+    "smooth_sigma_um": 0.7,
+    "background_sigma_um": 12.0,
+    "threshold_factor": 1.0,
+    "min_area_um2": 20,
+    "max_area_um2": 300,
+    "fill_holes_um2": 8.0,
+    "seed_min_distance_um": 3.0,
+    "exclude_border": true,
+    "review_min_solidity": 0.8,
+    "review_max_eccentricity": 0.95,
+    "local_block_um": 25.0,
+    "local_otsu_floor": 0.6,
+    "local_min_solidity": 0.8,
+    "stardist_model": "2D_versatile_fluo",
+    "stardist_smooth_um": 1.4,
+    "stardist_target_pixel_um": 0.69,
+    "stardist_tiles": [
+      2,
+      2
+    ],
+    "stardist_clahe": true,
+    "stardist_clahe_kernel_um": 25.0,
+    "stardist_clahe_clip": 0.01,
+    "stardist_probability_threshold": null,
+    "min_dapi_contrast": 1.15,
+    "contrast_ring_inner_um": 1.5,
+    "contrast_ring_outer_um": 3.5
+  },
+  "spots": {
+    "pnoc": {
+      "method": "intensity",
+      "sigma_um": [
+        0.45,
+        0.7,
+        1.0
+      ],
+      "background_sigma_um": 4.0,
+      "min_distance_um": 1.0,
+      "snr_threshold": 10.0,
+      "min_response": 0.0,
+      "min_contrast": 0.0,
+      "intensity_background_radius_um": 8.0,
+      "intensity_smooth_um": 0.552428385416668,
+      "cluster_area_um2": 12.0,
+      "positive_min_spots": 3
+    },
+    "cre": {
+      "method": "intensity",
+      "sigma_um": [
+        0.45,
+        0.7,
+        1.0
+      ],
+      "background_sigma_um": 4.0,
+      "min_distance_um": 1.0,
+      "snr_threshold": 10.0,
+      "min_response": 0.0,
+      "min_contrast": 0.0,
+      "intensity_background_radius_um": 8.0,
+      "intensity_smooth_um": 0.552428385416668,
+      "cluster_area_um2": 12.0,
+      "positive_min_spots": 3
+    }
+  },
+  "qc": {
+    "saturation_value": null,
+    "review_crops": 12,
+    "crop_width_um": 45.0
+  }
+}
