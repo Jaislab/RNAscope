@@ -2,7 +2,9 @@
 """Batch DAPI-associated Pnoc/Cre analysis of single-section CZI images.
 
 Counts detected spot centers within nuclear masks or a configured surrounding
-region. Parameters are provisional; see README.md before interpreting.
+region. The primary endpoint is detectable Pnoc association among Cre-positive
+objects; this does not estimate the total cytoplasmic Pnoc-positive population.
+Parameters are provisional; see README.md before interpreting.
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import copy
 import csv
 from datetime import datetime, timezone
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import logging
@@ -27,7 +30,7 @@ from skimage import exposure, filters, measure, morphology, segmentation
 from skimage.feature import peak_local_max
 import tifffile
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 DEFAULT_CONFIG = {
     "channels": {
         "dapi": {"names": ["DAPI-T4", "DAPI"], "index": None, "fallback_index": 3},
@@ -88,7 +91,7 @@ SPOT_FIELDS = ["file", "scene", "gene", "spot_id", "x_px", "y_px", "x_um", "y_um
 COUNT_FIELDS = ["total_nuclei", "excluded_nuclei", "pnoc_positive", "cre_positive",
                 "double_positive", "pnoc_only", "cre_only", "neither", "nuclei_needing_review"]
 SUMMARY_FIELDS = ["file", "scene", "status", *COUNT_FIELDS,
-                  "pct_pnoc_expressing_cre", "pct_cre_expressing_pnoc", "assignment_expand_um", "warnings", "error"]
+                  "pct_pnoc_expressing_cre", "pct_cre_expressing_pnoc", "assignment_expand_um", "analysis_profile", "warnings", "error"]
 COLORS = {"neither": "#a0a0a0", "pnoc_only": "#00dd66", "cre_only": "#ff5577",
           "double_positive": "#ffe14a", "excluded": "#7080a0"}
 
@@ -256,6 +259,44 @@ def physical_footprint(radius_um: float, spacing) -> np.ndarray:
 _STARDIST_MODELS = {}
 
 
+def package_version(distribution, module=None):
+    """Best-effort provenance, including tensorflow-cpu / tensorflow-macos installs."""
+    try:
+        return str(importlib.metadata.version(distribution))
+    except Exception:
+        # Missing or damaged distribution metadata does not imply a broken import.
+        pass
+    module = module or {"scikit-image": "skimage"}.get(distribution, distribution.replace("-", "_"))
+    try:
+        version = getattr(importlib.import_module(module), "__version__", None)
+        return str(version) if version is not None else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def describe_profile(config):
+    n = config["nuclei"]
+    method = n["method"]
+    if method == "watershed":
+        method += "/" + n["threshold_method"]
+    elif method == "stardist" and n["stardist_clahe"]:
+        method += "/CLAHE"
+    return (f"{method}; Pnoc={config['spots']['pnoc']['method']}; Cre={config['spots']['cre']['method']}; "
+            f"expansion={config['assignment']['expand_um']:g} um")
+
+
+def preflight(config):
+    """Fail once for an unusable runtime before hashing or processing any images."""
+    if not hasattr(czifile.CziFile, "scenes"):
+        raise RuntimeError("The installed czifile lacks the required scenes API. "
+                           "Use Python 3.12 and install this repository's requirements.")
+    if config["nuclei"]["method"] == "stardist":
+        try:
+            load_stardist_model(config["nuclei"]["stardist_model"])
+        except Exception as exc:
+            raise RuntimeError(f"StarDist initialization failed before analysis: {exc}") from exc
+
+
 def load_stardist_model(name):
     """Use the publisher's registered archive hash and normal TLS verification."""
     if name not in _STARDIST_MODELS:
@@ -272,7 +313,7 @@ def load_stardist_model(name):
         model = StarDist2D.from_pretrained(name)
         folder = get_model_folder(StarDist2D, name)
         info = {"model": name,
-                "packages": {p: importlib.metadata.version(p) for p in ["stardist", "csbdeep", "tensorflow"]},
+                "packages": {p: package_version(p) for p in ["stardist", "csbdeep", "tensorflow"]},
                 "model_file_sha256": {p.name: sha256(p) for p in Path(folder).iterdir() if p.is_file()}}
         _STARDIST_MODELS[name] = model, info
     return _STARDIST_MODELS[name]
@@ -773,6 +814,7 @@ def analyze_scene(image, spacing, config, channel_metadata, out, source, scene):
     if not summary["total_nuclei"]:
         warnings.append("No accepted nuclei; inspect DAPI segmentation and size limits")
     summary.update(file=source, scene=str(scene), status="ok", assignment_expand_um=expand_um,
+                   analysis_profile=describe_profile(config),
                    warnings="; ".join(warnings), error="")
     for n in nuclei:
         n.update(file=source, scene=str(scene))
@@ -820,6 +862,9 @@ def run_batch(input_dir, output_dir, config, recursive=False):
         raise ValueError(f"No CZI files found in {input_dir}")
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError("Output folder is not empty; choose a new folder to preserve previous results")
+    profile = describe_profile(config)
+    print(f"Active profile: {profile}", flush=True)
+    preflight(config)
     output_dir.mkdir(parents=True, exist_ok=True)
     log = logging.getLogger("rnascope")
     log.setLevel(logging.INFO)
@@ -829,9 +874,10 @@ def run_batch(input_dir, output_dir, config, recursive=False):
     summaries, inputs = [], []
     write_json(output_dir / "config_used.json", config)
     started_at = datetime.now(timezone.utc).isoformat()
-    packages = {name: importlib.metadata.version(name) for name in
+    packages = {name: package_version(name) for name in
                 ["numpy", "scipy", "scikit-image", "czifile", "matplotlib", "tifffile"]}
     try:
+        log.info("Active profile: %s", profile)
         for path in files:
             relative = path.relative_to(input_dir).as_posix()
             log.info("Reading %s", relative)
@@ -860,22 +906,27 @@ def run_batch(input_dir, output_dir, config, recursive=False):
                                   f"double+ {result['double_positive']} (provisional)", flush=True)
                         except Exception as exc:
                             log.exception("Scene failed: %s / %s", relative, scene_id)
-                            summaries.append({"file": relative, "scene": str(scene_id), "status": "failed", "error": str(exc)})
+                            summaries.append({"file": relative, "scene": str(scene_id), "status": "failed", "error": str(exc),
+                                              "analysis_profile": profile, "assignment_expand_um": config["assignment"]["expand_um"]})
                             print(f"  FAILED scene {scene_id}: {exc}", file=sys.stderr)
             except Exception as exc:
                 log.exception("File failed: %s", relative)
-                summaries.append({"file": relative, "scene": "", "status": "failed", "error": str(exc)})
+                summaries.append({"file": relative, "scene": "", "status": "failed", "error": str(exc),
+                                  "analysis_profile": profile, "assignment_expand_um": config["assignment"]["expand_um"]})
                 print(f"  FAILED {relative}: {exc}", file=sys.stderr)
             write_csv(output_dir / "summary.csv", summaries, SUMMARY_FIELDS)
         total = aggregate(summaries)
         failed = sum(s["status"] == "failed" for s in summaries)
         total.update(successful_scenes=sum(s["status"] == "ok" for s in summaries), failed_items=failed,
                      assignment_expand_um=config["assignment"]["expand_um"],
+                     analysis_profile=profile,
+                     primary_endpoint="pct_cre_expressing_pnoc",
                      complete=not failed, interpretation=f"Provisional RNA peak counts; nucleus expansion {config['assignment']['expand_um']:g} um; review QC")
         write_json(output_dir / "batch_summary.json", total)
         write_csv(output_dir / "batch_summary.csv", [total], [*COUNT_FIELDS, "pct_pnoc_expressing_cre",
-                  "pct_cre_expressing_pnoc", "assignment_expand_um", "successful_scenes", "failed_items", "complete"])
+                  "pct_cre_expressing_pnoc", "assignment_expand_um", "analysis_profile", "successful_scenes", "failed_items", "complete"])
         write_json(output_dir / "run_manifest.json", {"script_version": VERSION, "script_sha256": sha256(__file__),
+                   "analysis_profile": profile,
                    "started_at_utc": started_at, "finished_at_utc": datetime.now(timezone.utc).isoformat(),
                    "python_version": sys.version, "packages": packages, "inputs": inputs,
                    "config_sha256": sha256(output_dir / "config_used.json")})
@@ -886,26 +937,38 @@ def run_batch(input_dir, output_dir, config, recursive=False):
         log.removeHandler(handler)
 
 
+def load_profile(path):
+    config = merge_config(json.loads(Path(path).read_text(encoding="utf-8")))
+    validate_config(config)
+    return config
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--input", type=Path, help="Folder containing CZI files")
     parser.add_argument("--output", type=Path, help="New or empty results folder")
-    parser.add_argument("--config", type=Path, help="JSON settings; omitted keys use defaults")
+    parser.add_argument("--config", type=Path, help="Required for analysis: choose an explicit JSON profile")
     parser.add_argument("--recursive", action="store_true", help="Include CZI files in subfolders")
-    parser.add_argument("--write-default-config", type=Path, metavar="PATH", help="Write settings and exit")
+    parser.add_argument("--write-default-config", type=Path, metavar="PATH", help="Copy the shipped StarDist + 2 um profile and exit")
     parser.add_argument("--version", action="version", version=VERSION)
     args = parser.parse_args(argv)
     if args.write_default_config:
-        with args.write_default_config.open("x", encoding="utf-8") as f:
-            json.dump(DEFAULT_CONFIG, f, indent=2); f.write("\n")
+        try:
+            config = load_profile(Path(__file__).with_name("settings.json"))
+            with args.write_default_config.open("x", encoding="utf-8") as f:
+                json.dump(config, f, indent=2); f.write("\n")
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
         return 0
     if args.input is None or args.output is None:
         parser.error("--input and --output are required")
+    if args.config is None:
+        parser.error("--config is required: use settings_nucleus_only.json for nuclear overlap "
+                     "or settings.json for nuclei plus 2 um; no method is selected silently")
     try:
-        config = merge_config(json.loads(args.config.read_text()) if args.config else {})
-        validate_config(config)
+        config = load_profile(args.config)
         return run_batch(args.input, args.output, config, args.recursive)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         parser.error(str(exc))
 
 

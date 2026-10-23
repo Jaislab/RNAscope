@@ -1,11 +1,11 @@
-# Validation of this implementation
+# Historical v0.1 validation
 
 The Python 3.12 environment installs successfully from `requirements-lock.txt`.
 Rerunning the saved installation script succeeds without changing the source
 or settings. All **15 software tests pass**, including a synthetic image with
 known nuclei, known spot locations, and known overlap percentages.
 
-The uploaded `20X_L_CZI.czi` was processed with the supplied `settings.json`.
+The reference `20X_L_CZI.czi` was processed with the supplied `settings.json`.
 Its metadata identify a single 1024 × 1024 section, four 16-bit channels, and
 0.690535481770835 µm pixels in X and Y. Every exported spot-to-nucleus assignment
 was checked against the saved label image. Per-nucleus spot counts, aggregate
@@ -49,15 +49,13 @@ counts equaled twice the single-image counts, completeness was false, and the
 process returned exit 1. These duplicate-image outputs were used only to check
 batch behavior and are not included in the example biological results.
 
-Reproduce the example on this cloud machine using a new output directory:
+The reference CZI and runtime outputs are not distributed in this repository.
+To run the historical parameter profile with the current CLI, supply your own
+input folder and use an explicit profile:
 
 ```bash
-cd /workspace/RNAscope
-MPLCONFIGDIR=/tmp/rnascope-matplotlib .venv/bin/python rnascope.py \
-  --input /workspace/attachments/b4183988-0b21-4f53-9763-7c1e1d17dae7 \
-  --output results_example_repeat \
-  --config settings.json
+python rnascope.py --input /path/to/czi_folder --output results_legacy --config settings_legacy.json
 ```
 
-The bundle includes code, settings, dependencies, tests and example results;
-the original CZI and installed virtual environment are not included.
+This archived note describes v0.1 software checks and provisional results;
+see the current README and VALIDATION.md for the primary interpretation.

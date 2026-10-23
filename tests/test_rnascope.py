@@ -1,10 +1,13 @@
 """Behavioral tests with known spot locations and classifications."""
 import copy
+from contextlib import redirect_stderr
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -22,6 +25,30 @@ def gaussian_spots(shape, positions, sigma=1.2, amplitude=2000, noise=0):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_no_config_cannot_silently_select_a_method(self):
+        error = io.StringIO()
+        with patch.object(rn, "run_batch") as run, redirect_stderr(error), self.assertRaises(SystemExit) as exc:
+            rn.main(["--input", "/input", "--output", "/output"])
+        self.assertEqual(exc.exception.code, 2)
+        self.assertIn("--config is required", error.getvalue())
+        run.assert_not_called()
+
+    def test_all_shipped_profiles_validate(self):
+        root = Path(rn.__file__).parent
+        for path in root.glob("settings*.json"):
+            with self.subTest(profile=path.name):
+                rn.load_profile(path)
+        production = rn.load_profile(root / "settings.json")
+        self.assertEqual(production["nuclei"]["method"], "stardist")
+        self.assertEqual(production["assignment"]["expand_um"], 2)
+        self.assertEqual(rn.load_profile(root / "settings_nucleus_only.json")["assignment"]["expand_um"], 0)
+
+    def test_exported_default_is_the_shipped_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profile.json"
+            self.assertEqual(rn.main(["--write-default-config", str(path)]), 0)
+            self.assertEqual(rn.load_profile(path), rn.load_profile(Path(rn.__file__).with_name("settings.json")))
+
     def test_partial_settings_and_typos(self):
         config = rn.merge_config({"spots": {"pnoc": {"positive_min_spots": 4}}})
         rn.validate_config(config)
@@ -200,6 +227,52 @@ class CountingTests(unittest.TestCase):
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_missing_package_metadata_uses_module_version(self):
+        with patch.object(rn.importlib.metadata, "version", side_effect=rn.importlib.metadata.PackageNotFoundError), \
+             patch.object(rn.importlib, "import_module", return_value=SimpleNamespace(__version__="2.21.0")):
+            self.assertEqual(rn.package_version("tensorflow"), "2.21.0")
+        with patch.object(rn.importlib.metadata, "version", side_effect=rn.importlib.metadata.PackageNotFoundError), \
+             patch.object(rn.importlib, "import_module", side_effect=ImportError):
+            self.assertEqual(rn.package_version("unavailable"), "unknown")
+
+    def test_startup_environment_failure_is_reported_once(self):
+        config = rn.load_profile(Path(rn.__file__).with_name("settings.json"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / "one.czi").write_bytes(b"unused")
+            with patch.object(rn, "load_stardist_model", side_effect=RuntimeError("missing runtime")) as model, \
+                 patch.object(rn, "sha256") as digest:
+                with self.assertRaisesRegex(RuntimeError, "before analysis"):
+                    rn.run_batch(root, root / "output", config)
+                model.assert_called_once(); digest.assert_not_called()
+                self.assertFalse((root / "output").exists())
+
+    def test_metadata_failure_does_not_abort_batch_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / "bad.czi").write_bytes(b"invalid CZI")
+            with patch.object(rn.importlib.metadata, "version", side_effect=rn.importlib.metadata.PackageNotFoundError):
+                self.assertEqual(rn.run_batch(root, root / "output", rn.DEFAULT_CONFIG), 1)
+            self.assertTrue((root / "output" / "run_manifest.json").exists())
+
+    def test_shipped_production_profile_exports_with_mocked_nuclei(self):
+        config = rn.load_profile(Path(rn.__file__).with_name("settings.json"))
+        shape = (100, 100); y, x = np.indices(shape)
+        labels = np.zeros(shape, np.int32); labels[(y - 50) ** 2 + (x - 50) ** 2 < 12 ** 2] = 1
+        image = np.zeros((4, *shape), np.uint16)
+        image[3] = 100 + 5000 * (labels > 0)
+        positions = [(46, 46), (46, 54), (54, 50)]
+        image[2] = gaussian_spots(shape, positions, noise=3)
+        image[0] = gaussian_spots(shape, positions, noise=3)
+        metadata = [{"name": n, "fluor": ""} for n in ["Cy5-T1", "Cy3-T2", "At520-T3", "DAPI-T4"]]
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(rn, "stardist_labels", return_value=(labels, {"method": "stardist"})):
+            out = Path(directory) / "scene"
+            result = rn.analyze_scene(image, (0.5, 0.5), config, metadata, out, "known.czi", 0)
+            self.assertEqual(result["total_nuclei"], 1)
+            self.assertEqual(result["double_positive"], 1)
+            self.assertEqual(result["pct_cre_expressing_pnoc"], 100)
+            self.assertIn("stardist/CLAHE", result["analysis_profile"])
+            self.assertTrue((out / "assignment_labels.tif").exists())
+
     def test_known_nuclei_to_exported_results(self):
         shape = (150, 150)
         centers = [(40, 40), (40, 105), (105, 75)]

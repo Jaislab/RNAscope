@@ -1,88 +1,102 @@
-# Version 0.2 validation and comparison
+# Methods validation and reference results
 
-The workflow was revised using the newer uploaded `rnascope_pnoc_cre(1).py`.
-The user selected nucleus-plus-2 µm assignment. The ≥3 detected-peak criterion
-per gene remains unchanged. No overlap target enters the algorithm.
+## Endpoint and scope
 
-## Current example results
+The intended primary endpoint is the fraction of Cre-positive nuclei with
+detectable Pnoc signal in the same nuclear mask. The motivating images show
+nucleus-enriched Cre fluorescence and predominantly cytoplasmic Pnoc signal.
+Nuclear detection can therefore miss Pnoc expression outside the nucleus.
+Neither total Pnoc-expressing cells nor the fraction of all Pnoc cells expressing
+Cre can be inferred from these nuclear measurements alone.
 
-Both profiles were executed on the original `20X_L_CZI.czi`, using identical
-StarDist/CLAHE nuclear segmentation and intensity-peak detection. Only the
-assignment radius differs.
+The optional nucleus-plus-2 µm region includes additional surrounding RNA.
+This is approximate nucleus-associated signal, not a validated whole-cell
+boundary or a purely nuclear-overlap measurement. The region applies to both
+RNA channels, so the Cre-positive denominator can also change.
 
-| Measurement | Nucleus only | Nucleus + 2 µm |
+## Reference image and profiles
+
+The reference `20X_L_CZI.czi` is a single 1024 × 1024 section, four 16-bit
+channels, with X/Y sampling 0.690535481770835 µm/pixel. The source CZI and runtime
+outputs are not distributed with this repository. The numerical examples are
+reference checks, not a public regression dataset or manual accuracy benchmark.
+
+Both current profiles use identical StarDist/CLAHE nuclear segmentation and
+intensity-peak detection, with an independent ≥3 peak criterion for each gene.
+Only the assignment radius differs. The supplied parameter files reproduce the
+following reference results:
+
+| Measurement | Nuclear mask | Nuclear mask + 2 µm |
 |---|---:|---:|
 | Accepted nuclei | 1,554 | 1,554 |
 | Rejected candidate masks | 216 | 216 |
-| Pnoc-positive | 291 | 371 |
-| Cre-positive | 89 | 121 |
-| Double positive | 78 | 109 |
-| Cre-positive / Pnoc-negative | 11 | 12 |
-| Cre-positive also Pnoc-positive | 87.64% | **90.08%** |
-| Pnoc-positive also Cre-positive | 26.80% | 29.38% |
+| Pnoc-positive objects | 291 | 371 |
+| Cre-positive objects | 89 | 121 |
+| Double-positive objects | 78 | 109 |
+| Cre-positive / Pnoc-below-cutoff objects | 11 | 12 |
+| Cre-positive with detectable Pnoc | **87.64%** | **90.08%** |
+| Detected Pnoc-positive objects also Cre-positive | 26.80% | 29.38% |
 
-These are provisional **detected-peak** results. Every Cre-only object is
-included in the corresponding review CSV/PDF/PNG pages, with separate raw
-channel panels, outlines and detections. Nuclear-only measurements are retained
-in the expanded run's cell table as well.
+These are provisional **detected-peak** results. A Pnoc-below-cutoff nucleus is
+not necessarily a Pnoc-negative cell. The reverse percentage refers only to
+the observed region-positive Pnoc subset. No expected overlap percentage is an
+analysis parameter; the expanded result exceeding 90% does not validate accuracy.
 
-The new DAPI masks follow broader nuclear outlines and reduce the fragmented
-masks visible in the previous result. The representative comparison image
-`results_diagnostics/segmentation_comparison.png` uses the same raw DAPI crop
-and only accepted objects in both panels. It was not selected by overlap score.
-This visual check is not a manually annotated accuracy benchmark.
+## Reference implementation comparison
 
-## What changed in the newer uploaded script
+The v0.2.0 method was compared with a separate reference implementation using
+CLAHE/StarDist, local DAPI-contrast filtering and morphological-background
+intensity peaks. Results from that comparison were:
 
-- Local DAPI contrast enhancement before StarDist and a nucleus/background
-  contrast filter, with 20–300 µm² nuclear area limits.
-- A different peak detector, using morphological background correction and
-  intensity maxima, rather than multiscale LoG.
-- Its default assignment includes a 2 µm surrounding region. This changes the
-  biological measurement and was explicitly selected by the user.
-- It can substitute saturated area / 3.3 µm² for peak counts. This is an
-  unvalidated area-based estimate, not an observation of individual puncta.
-
-Separately executing the newer reference's relevant functions gave:
-
-| Uploaded reference variant | Cre+ | Both+ | Both / Cre+ |
+| Reference variant | Cre-positive | Double positive | Both / Cre-positive |
 |---|---:|---:|---:|
-| Nucleus-only detected peaks | 89 | 78 | 87.64% |
+| Nuclear-mask detected peaks | 89 | 78 | 87.64% |
 | +2 µm detected peaks | 122 | 110 | 90.16% |
-| +2 µm including saturated-area estimates | 122 | 111 | 90.98% |
+| +2 µm with saturated-area estimates | 122 | 111 | 90.98% |
 
-The revised production script retains detected peaks and saturation flags,
-without area-derived count substitution. It also blocks assignment inside
-rejected DAPI objects. That safeguard explains the slight difference from the
-reference's expanded result. The script uses metadata/type-derived saturation
-limits, rather than assuming an image's observed maximum must be saturation.
+This repository preserves detected peaks instead of replacing counts with
+saturated area / 3.3 µm². It also blocks assignment inside rejected DAPI objects.
+These documented choices account for the small differences in the expanded
+comparison. The separate reference is a software comparison, not independent
+biological ground truth. The earlier watershed/LoG result is documented in
+[the historical v0.1 note](docs/archive/validation-v0.1.md).
 
-The earlier uploaded script was superseded during work. Its trial results are
-not the basis of the current profile. The preceding v0.1 result (75%) and its
-settings/results remain available separately for reproducibility; they used a
-different segmentation and detector and should not be compared as though only
-the assignment radius changed.
+## Software evidence
 
-## Software and runtime evidence
+All **26 tests pass** in the tested Python 3.12/Linux environment. Tests cover
+known peaks and background noise, explicit profiles, every shipped JSON, default
+profile export, missing distribution metadata, early environment failure,
+production-profile exports with mocked nucleus inference, thresholds, region
+assignment, excluded-object blocking, percentages, failures and file outputs.
 
-- All **19 tests pass** in the installed Python 3.12 environment. Tests cover
-  both detectors, background noise, DAPI contrast filtering, explicit backend
-  selection, nuclear/expanded assignment, excluded-object blocking, physical
-  distances, independent gene thresholds, denominator calculations and exports.
-- StarDist inference was actually run on CPU with the official
-  `2D_versatile_fluo` model. The registered archive checksum and TLS verification
-  were preserved. Model file hashes and package versions are saved per scene.
-- Both saved profiles were exercised end to end with successful exit status.
-  Their nuclear label arrays are identical, confirming a controlled comparison.
-- Every exported spot's nuclear and assignment IDs were checked against the
-  saved masks. Every cell's raw nuclear and assigned counts were recomputed
-  from the spot CSV. The expanded masks were checked for the 2 µm distance
-  bound and exclusion of rejected-nucleus pixels.
-- The manifests' script hashes match the delivered source. The dependency/model
-  setup script was rerun successfully and executed the 19-test suite.
+Actual CPU inference with official `2D_versatile_fluo` weights was executed on
+the reference CZI. Registered archive checksum and TLS verification were
+preserved; per-scene metadata record model file hashes and package versions.
+Both profiles completed end to end with the reference counts above. Their
+nuclear label arrays match, supporting a controlled region comparison.
 
-There are no manual ground-truth labels or negative-control images in this
-session. Saturated clusters, background peaks, remaining segmentation errors,
-and RNA in neighboring processes can affect positivity. The current >90%
-result does not establish biological sensitivity/specificity. Review the masks
-and the 12 Cre-only cells before interpreting these results across animals.
+During the v0.2.1 audit fix, the nucleus-only run was also repeated with the
+`tensorflow` distribution-version lookup deliberately raising
+`PackageNotFoundError`. Inference and exports still completed using the imported
+module's version. This simulates the provenance failure; it does not claim an
+actual installation test of every alternative TensorFlow package or platform.
+
+Exported spot IDs/counts were checked against saved nuclear and assignment
+labels. The expanded masks respect the 2 µm distance limit and rejected-object
+blocking. Script hashes in the run manifests match the source used. Active
+methods/radius are printed and recorded; missing `--config` now fails before
+analysis, instead of selecting historical parameters.
+
+## Experimental work still needed
+
+No expert-annotated ground truth or matched negative-control images were used
+for these reference runs. Review DAPI masks, negative controls, near-cutoff
+calls, and saturated RNA clusters. The dedicated review outputs include every
+accepted Cre-positive/Pnoc-below-cutoff object. QC flags remain broad and are
+not automatic biological exclusions or calibrated class-error probabilities.
+
+Further work includes matched negative controls, sample/animal grouping,
+cytoplasmic cell-boundary information when whole-cell claims are intended,
+and separate validation of any future Z-stack or chance-overlap analysis.
+An independent software audit and matching reference counts do not establish
+biological sensitivity, specificity or a complete Pnoc-cell census.
