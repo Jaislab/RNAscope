@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2
+
+- Replace the strong localization contrast with measured detected-peak fractions
+  and the sparse-Cre / detection-cutoff rationale for the primary endpoint.
+- Attribute approximate manual counts to the round-two audit without claiming
+  cell-by-cell ground truth or formally validated sensitivity.
+- Separate priority review reasons from informational per-reason QC flags.
+- Add a native-or-higher-resolution annotated overlay with matching cell IDs.
+- Add lossless, µm-calibrated ImageJ companion masks while retaining native IDs.
+- Use CZI component bit depth for saturation before falling back to storage type.
+- State the Intel-Mac limitation of the pinned TensorFlow 2.21 environment.
+- Preserve reference expression counts and add export/QC tests.
+
 ## 0.2.1
 
 - Document Cre-positive → detectable Pnoc association as the primary endpoint,

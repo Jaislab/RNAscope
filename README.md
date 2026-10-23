@@ -3,16 +3,24 @@
 This script is primarily intended to measure **the fraction of Cre-positive
 nuclei with detectable Pnoc RNA signal** in batch CZI images.
 
-In the images for which it was developed, Cre RNA fluorescence is strongly
-localized to the nucleus, whereas Pnoc mRNA appears predominantly cytoplasmic.
-DAPI defines nuclei, so **nuclear spatial overlap is the directly supported
-measurement**. Reliable assignment of the full cytoplasmic Pnoc population to
-individual cells requires additional cell-boundary information. Nuclear
-segmentation and puncta detection still require expert review and controls.
+Cre is the **sparser detected signal** in the reference image: 1,209 Cre peaks
+versus 3,531 Pnoc peaks. Cells expressing Cre weakly can fall below the ≥3-peak
+Cre cutoff, increasing the apparent Pnoc-only group and depressing the reverse
+percentage. The Cre-conditioned endpoint focuses on the detected Cre-positive
+subset; it does not recover missed Cre cells or guarantee an unbiased census.
+
+Detected peak positions do **not** establish a strong localization contrast:
+66.7% of Cre peaks and 65.4% of Pnoc peaks lie inside candidate DAPI nuclear
+masks. DAPI supports a nuclear-region measurement; assigning whole cytoplasms
+to individual cells requires additional boundary information. See the
+[measured fractions and interpretation](VALIDATION.md#detected-peak-distribution).
 
 ## Install and run
 
-Tested on Linux CPU with Python 3.12; a GPU is not required.
+Tested on Linux CPU with Python 3.12; a GPU is not required. The pinned
+TensorFlow 2.21 environment is not an Intel-Mac installation target: that
+release has no Intel-macOS wheel. Windows and Apple-silicon macOS are not
+validated platforms for this repository yet.
 
 ```bash
 python3 -m venv .venv
@@ -43,12 +51,12 @@ Both genes must meet their thresholds in the same nucleus; their individual
 puncta do not need to coincide. This measures nucleus-associated RNA signal,
 not molecular colocalization or complete whole-cell expression.
 
-Because Pnoc is mainly cytoplasmic, a nucleus with insufficient Pnoc signal
-can still belong to a Pnoc-expressing cell. The script therefore **does not
-estimate the total Pnoc-positive cell population**. The reverse percentage,
-`pct_pnoc_expressing_cre`, describes only the detected Pnoc-positive subset;
-it should not be used to estimate the fraction of all Pnoc cells expressing Cre.
-These two percentages are not equally informative population measurements.
+A below-cutoff nucleus can belong to a cell expressing that gene weakly or
+outside the mask. The script therefore **does not estimate the total
+Pnoc-positive or Cre-positive cell population**. The reverse percentage,
+`pct_pnoc_expressing_cre`, is particularly sensitive to missed low-Cre cells
+and should not be used as the fraction of all Pnoc cells expressing Cre.
+Neither conditional percentage is automatically an unbiased population estimate.
 
 ## Nuclear overlap versus a surrounding region
 
@@ -99,16 +107,28 @@ percentage enters the algorithm. See [methods](docs/METHODS.md) and
   nuclear and assigned-region peak counts, classes and QC flags.
 - `spots.csv`, `nuclei_labels.tif`, and optionally `assignment_labels.tif`:
   individual detections and their exact assignments.
+- `annotated_overlay.png` / `.pdf`: a single full-image overlay at at least
+  native resolution, with accepted nucleus IDs matching the CSV. The PDF labels
+  remain zoomable; `annotated_overlay_legend.json` explains colors and IDs.
+- `nuclei_labels_imagej.tif` / `assignment_labels_imagej.tif`: Fiji/ImageJ
+  companion masks calibrated directly in µm, with unchanged IDs.
 - `qc_overview.png`, `review_crops.png`: nucleus/region boundaries and detections.
 - `cre_only_review.csv` / `.pdf` / PNG pages: every accepted Cre-positive object
   below the Pnoc cutoff. Review these for missed signal, background and saturation.
 - `config_used.json`, `run_manifest.json`, `metadata.json`, `run.log`: parameters,
   hashes, versions, channel mappings, calibration and diagnostics.
 
-Review flags are currently broad: `needs_review` includes informational DAPI
-saturation as well as possible classification problems. It is not an automatic
-exclusion rule or a probability that the class is wrong. Saturated RNA clusters
-remain flagged; their area is not converted to invented punctum counts.
+`needs_review` is now a **priority queue**: accepted objects within ±1 peak
+of either cutoff, or below a gene's cutoff with saturated RNA signal for that
+gene. `review_reasons` explains priority; separate `flag_*` columns retain every
+reason, including informational DAPI saturation and irregular mask shape.
+Informational flags alone do not add an object to the queue. This is a review
+heuristic, not an error probability or exclusion rule; it does not capture
+every possible segmentation problem. Every Cre-only object still gets a review
+page, whether or not it is in the priority queue.
+
+Saturation honors an explicit override, then CZI `ComponentBitCount`, then the
+integer storage limit. Saturated clusters are not converted to invented counts.
 
 Zero denominators are `NA` in CSV and `null` in JSON. Batch percentages use
 summed counts. Images/nuclei are not automatically independent biological
@@ -120,9 +140,10 @@ replicates; group results by animal/sample using the experimental design.
 python -m unittest discover -s tests -v
 ```
 
-The 26 tests cover software behavior, all shipped profiles, missing version
-metadata, explicit profile selection and a production-profile integration test
-with mocked nucleus inference. Actual StarDist inference was also executed on
+The 29 tests cover software behavior, all shipped profiles, missing version
+metadata, explicit profile selection, priority/informational QC separation,
+bit-depth saturation, lossless ImageJ masks and production-profile exports with
+mocked nucleus inference. Actual StarDist inference was also executed on
 the reference CZI. Passing tests are not a biological sensitivity/specificity
 benchmark. See the [audit response](docs/AUDIT_REVIEW.md) for implemented fixes
 and outstanding recommendations, and the [changelog](CHANGELOG.md).

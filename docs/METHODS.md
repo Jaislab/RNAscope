@@ -3,12 +3,17 @@
 ## Intended measurement
 
 The primary endpoint is Pnoc signal associated with Cre-positive nuclei.
-The motivating images show nuclear enrichment of Cre RNA and mainly cytoplasmic
-Pnoc signal. A DAPI mask directly defines a nuclear region, not an entire cell.
-Nucleus-only positivity can therefore miss Pnoc expressed in the cytoplasm.
-The reverse conditional percentage applies only to the detected Pnoc subset,
-not the complete Pnoc-expressing population. These observations are specific to
-the intended images and should be checked when applying the tool to other assays.
+Cre has fewer detected peaks than Pnoc in the reference image. Under-detection
+of weak Cre signal can move Cre-expressing cells into the Pnoc-only class under
+the ≥3-peak rule, affecting the reverse conditional percentage. Conditioning on
+detected Cre-positive objects addresses the chosen endpoint but does not remove
+all selection bias or recover cells missed by the detector.
+
+The similar detected-peak fractions inside candidate DAPI masks (66.7% Cre,
+65.4% Pnoc) do not establish stronger nuclear localization of one probe. These
+are thresholded-detection and mask statistics, not a biochemical localization
+assay. A DAPI mask defines a nuclear region, not an entire cell. Neither nuclear
+nor expanded-region counts establish the total population expressing a gene.
 
 The two channel thresholds are applied independently (≥3 peaks in each region).
 Double positivity requires both genes in the same region; it does not require
@@ -78,23 +83,37 @@ registration or Cy3 subtraction. Subpixel/merged puncta and saturated clusters
 cannot be resolved reliably. Counts include detected peaks, which can include
 artifact or cluster maxima. No saturated-area-to-transcript substitution is used.
 
-Saturation uses `qc.saturation_value` when configured, otherwise the integer
-storage limit. For 12- or 14-bit data in a 16-bit container, explicitly configure
-the acquisition's real ceiling (4095 or 16383); metadata-bit-depth support is an
-outstanding audit recommendation. `needs_review` is currently a broad union of
-flags, including informational DAPI saturation. Flagged cells are not excluded
-automatically. Review all Cre-positive/Pnoc-below-cutoff objects in the dedicated
-review CSV/PDF/PNG outputs, plus representative positives and negatives.
+Saturation first uses `qc.saturation_value` when set; otherwise per-channel
+CZI `ComponentBitCount`, falling back to image-level component bits and finally
+the integer storage ceiling. Valid 12/14-bit metadata therefore give 4095/16383
+for 16-bit containers. Missing/invalid bit metadata fall back to storage range;
+floating-point images require an explicit physical ceiling. Metadata and the
+resolved threshold are recorded. No intensity values or peak thresholds change.
 
-TIFF labels are unsigned 32-bit IDs, calibrated in pixels/cm with µm sizes in
-metadata; they are not intensity images. Spot CSV `nucleus_id` is the raw
+All QC reasons remain in `qc_flags` and separate boolean `flag_*` columns.
+`needs_review` is restricted to accepted objects with a count within ±1 of a
+gene cutoff, or saturated RNA for a gene whose count is below cutoff.
+`review_reasons` lists the actionable conditions. DAPI saturation, irregular
+shape, or a saturated RNA-positive object above cutoff remain informational
+unless a priority condition also applies. This is a triage rule, not a claim
+that other masks/classes cannot be wrong. Review all Cre-positive/Pnoc-below-
+cutoff objects in the dedicated pages, plus representative positives/negatives.
+
+Native TIFF labels retain unsigned 32-bit IDs and pixels/cm calibration.
+ImageJ companions (`*_labels_imagej.tif`) use direct µm calibration: uint16
+when IDs fit, otherwise float32 for IDs up to 2^24, whose integer values are
+exactly representable. Beyond that bound the optional companion is omitted
+with a logged diagnostic; native uint32 masks still preserve IDs. No renumbering
+or rounding is performed. These are label masks, not intensity images. Spot CSV `nucleus_id` is the raw
 containing nucleus, `assignment_id` is the region owner, and `counted` indicates
 contribution to an accepted object. Excluded objects never enter summary totals.
 
 ## Runtime and reproducibility
 
 The pinned StarDist environment was tested on Linux CPU and Python 3.12.
-Other operating-system/runtime combinations have not been validated here.
+Windows and Apple-silicon macOS have not been validated here. The pinned
+TensorFlow 2.21 dependency has no Intel-macOS wheel, so this environment is not
+an installation target for Intel Macs.
 Compatible TensorFlow installations may use different distribution names;
 version recording falls back to the imported module's version and then
 `unknown`, rather than aborting analysis. Missing capabilities/model failures

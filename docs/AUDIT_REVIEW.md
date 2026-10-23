@@ -1,40 +1,50 @@
-# Response to the v0.2.0 repository audit
+# Repository audit responses
 
-The supplied independent audit was reviewed against the repository source and
-reference CZI. Findings are evidence to evaluate, not proof of assay accuracy.
-This update addresses execution reliability and interpretation without changing
-segmentation, peak detection, thresholds, region sizes or example count results.
+## Round one: execution fixes (v0.2.1)
 
-| Finding | Disposition in v0.2.1 |
+The first audit identified a provenance crash on working TensorFlow runtimes
+installed under another distribution name, and silent selection of historical
+methods without `--config`. Both were fixed and are covered by tests. Analysis
+requires an explicit profile; startup, logs, scene/batch summaries and manifests
+identify it. Runtime/model checks occur once before image processing.
+
+All shipped profiles are tested, and the current production profile is exercised
+with mocked nucleus inference. The round-two auditor reports that both profiles
+also ran unpatched on an actual `tensorflow-cpu` installation. That external
+result is distinct from the local test simulating missing distribution metadata.
+
+## Round two: evidence and review outputs (v0.2.2)
+
+| Finding | Disposition |
 |---|---|
-| Literal `tensorflow` distribution lookup can crash an otherwise working runtime | Fixed: all package-version recording falls back to the imported module version, then `unknown`. Tests simulate missing distribution metadata. |
-| Omitted `--config` silently selects historical methods | Fixed: analysis requires `--config`. Startup, scene/batch summaries and manifests identify the active method and region. |
-| Default-config export writes historical parameters | Fixed: it copies the shipped StarDist + 2 µm profile; nuclear-only remains an explicit separate profile. |
-| Environment failures repeat for every file | Improved: required CZI API and StarDist/model initialization are checked once before image processing. |
-| Shipped profiles are absent from tests | Fixed: every shipped JSON is validated; the current production profile is exercised in an integration test with mocked nucleus inference. |
-| Validation notes depend on private paths and absent result files | Rewritten as standalone documentation. Historical v0.1 notes are in `docs/archive/`. Local example outputs and screenshots are not claimed to be repository files. |
-| Primary scientific interpretation is unclear | README prioritizes Cre-positive nuclei with detectable Pnoc, explains nuclear/cytoplasmic localization, and distinguishes nuclear overlap from the optional 2 µm region. |
+| Localization wording exceeded the evidence | Corrected in README, methods and validation. Recomputed candidate-mask fractions are 66.7% Cre / 65.4% Pnoc. Similar detected-peak distributions do not establish a strong localization contrast. |
+| Primary endpoint rationale | Retained Cre-positive → detectable Pnoc, explaining that sparse Cre detection and the ≥3 cutoff can depress the reverse percentage. Conditioning on detected Cre does not remove all selection bias. |
+| Manual counting context | The auditor's two approximate manual counts near 90% are attributed as reported evidence. No object-level labels/denominators were supplied for a formal accuracy calculation. |
+| Most cells flagged for review | Added separate boolean flags and `review_reasons`. `needs_review` now prioritizes near-cutoff counts or below-cutoff genes with saturated RNA. The expanded reference queue falls from 955 to 413; DAPI saturation alone remains informational. |
+| Overview too small for IDs | Added a single full-image PNG at native-or-higher resolution and a PDF with zoomable labels, matching accepted IDs in `nuclei.csv`. Existing overview/crops remain. |
+| Fiji mask calibration | Added `*_labels_imagej.tif` companions in µm, with lossless uint16/float32 IDs and explicit handling of IDs too large for exact ImageJ floats. Native uint32 masks remain authoritative. |
+| 12/14-bit saturation in 16-bit storage | Added CZI `ComponentBitCount` handling, retaining explicit overrides and storage-limit fallback. The 16-bit reference threshold stays 65535. |
+| Intel Macs | README/methods now state that the pinned TensorFlow 2.21 environment has no Intel-macOS wheel; only Linux CPU was tested here. |
 
-## Remaining work
+Segmentation, detection thresholds, regions and expression classes are unchanged.
+The review-queue count changes by design; it is not a biological accuracy gain.
+All 12 expanded-region Cre-positive/Pnoc-below-cutoff objects remain in dedicated
+review pages, regardless of priority. Informational flags stay accessible;
+absence from the priority queue does not establish that a mask/class is correct.
 
-- Review-flag prioritization: `needs_review` still includes informational flags.
-  Per-reason columns and a classification-impact queue need a separately tested
-  rule; informational DAPI saturation should not be mistaken for a wrong class.
-- Bit-depth-aware saturation, a full-resolution annotated overview and
-  ImageJ-native label export remain improvements. Current saturation overrides
-  and TIFF calibration are documented in the methods.
-- Configurable thread counts, adaptive tiling and additional platform validation
-  remain performance/portability work. Current thread limits and tiles are explicit.
-- CI, distributable regression data, citation metadata and a license remain
-  repository-maintenance work. License and attribution choices belong to the
-  project owner; this update does not select a license or invent citation details.
-- Optional Z-stack handling, shifted-spot/ring-sweep chance controls and
-  area-derived saturated-cluster estimates change or add analytical methods.
-  They were not introduced by this audit fix. In particular, a maximum projection
-  can superimpose signals from different depths and needs separate validation.
-- Matched negative controls and expert review of discrepant/near-cutoff objects
-  remain experimental requirements. Neither an independent software audit nor
-  a >90% example overlap establishes biological sensitivity/specificity.
+## Remaining work and project decisions
 
-The numerical reference example is documented in [VALIDATION.md](../VALIDATION.md).
-The higher 2 µm result is not presented as the nuclear-overlap result.
+- CI across operating systems and a distributable regression dataset remain
+  portability/reproducibility work. Cross-platform installs are not claimed tested.
+- License and citation metadata require the owner's license/attribution choice;
+  this update does not select a license or invent citation details.
+- Thread counts remain bounded and fixed, with explicit configurable model tiles.
+  Exposing thread settings or selecting tiles automatically is future performance work.
+- Optional Z-stack projection, shifted-spot/ring-sweep chance controls, and
+  saturated-area count estimates introduce additional analytical methods and
+  require separate validation. A projection can combine different depths.
+- Matched negative controls and expert object review remain necessary. Reported
+  manual agreement and a >90% example are not sensitivity/specificity estimates.
+
+See [VALIDATION.md](../VALIDATION.md) for numerical evidence and denominator
+choices. The expanded-region result is not labeled nuclear overlap.

@@ -3,11 +3,12 @@
 ## Endpoint and scope
 
 The intended primary endpoint is the fraction of Cre-positive nuclei with
-detectable Pnoc signal in the same nuclear mask. The motivating images show
-nucleus-enriched Cre fluorescence and predominantly cytoplasmic Pnoc signal.
-Nuclear detection can therefore miss Pnoc expression outside the nucleus.
-Neither total Pnoc-expressing cells nor the fraction of all Pnoc cells expressing
-Cre can be inferred from these nuclear measurements alone.
+detectable Pnoc signal in the same nuclear mask. Detected Cre peaks are fewer
+than Pnoc peaks; low-Cre cells can miss the ≥3 criterion and inflate the apparent
+Pnoc-only class. This detection-sensitivity limitation motivates the chosen
+direction of analysis. Conditioning on detected Cre is not proof of unbiased
+population sensitivity, nor does it recover undetected Cre-expressing cells.
+Neither gene's complete expressing-cell population is established by these counts.
 
 The optional nucleus-plus-2 µm region includes additional surrounding RNA.
 This is approximate nucleus-associated signal, not a validated whole-cell
@@ -42,6 +43,31 @@ not necessarily a Pnoc-negative cell. The reverse percentage refers only to
 the observed region-positive Pnoc subset. No expected overlap percentage is an
 analysis parameter; the expanded result exceeding 90% does not validate accuracy.
 
+## Detected-peak distribution
+
+The exported v0.2.1 peak tables were recomputed during round-two audit review:
+
+| Measurement | Cre | Pnoc |
+|---|---:|---:|
+| All detected peaks | 1,209 | 3,531 |
+| In any candidate nuclear mask, including rejected masks | 806 (66.7%) | 2,311 (65.4%) |
+| In accepted nuclear masks | 778 (64.4%) | 2,195 (62.2%) |
+| In accepted nucleus-plus-2 µm regions | 1,013 (83.8%) | 2,869 (81.3%) |
+
+The two probes have similar spatial fractions among **detected** peaks.
+These values do not establish a strong Cre-nuclear versus Pnoc-cytoplasmic
+localization contrast. They also do not prove identical biological localization:
+peak thresholds, optical resolution, background and the mask definition affect
+the observed distribution. The earlier strong localization wording was removed.
+
+The round-two auditor reports two independent manual coexpression counts of
+approximately 90%. That is useful external context for the Cre-conditioned
+endpoint. Individual annotations, matching object IDs and full denominators
+were not provided in the report, so no cell-by-cell sensitivity/specificity or
+formal uncertainty comparison is claimed. The reverse automated percentage is
+particularly vulnerable to under-detection of low-Cre cells; its full discrepancy
+from reported manual counting has not been assigned to one proven mechanism.
+
 ## Reference implementation comparison
 
 The v0.2.0 method was compared with a separate reference implementation using
@@ -63,11 +89,14 @@ biological ground truth. The earlier watershed/LoG result is documented in
 
 ## Software evidence
 
-All **26 tests pass** in the tested Python 3.12/Linux environment. Tests cover
+All **29 tests pass** in the tested Python 3.12/Linux environment. Tests cover
 known peaks and background noise, explicit profiles, every shipped JSON, default
 profile export, missing distribution metadata, early environment failure,
 production-profile exports with mocked nucleus inference, thresholds, region
 assignment, excluded-object blocking, percentages, failures and file outputs.
+New tests separate priority and informational flags, exercise component-bit
+saturation, verify ImageJ calibration and exact IDs at dtype boundaries, and
+check that the annotated overlay retains at least native image resolution.
 
 Actual CPU inference with official `2D_versatile_fluo` weights was executed on
 the reference CZI. Registered archive checksum and TLS verification were
@@ -89,14 +118,32 @@ analysis, instead of selecting historical parameters.
 
 ## Experimental work still needed
 
-No expert-annotated ground truth or matched negative-control images were used
-for these reference runs. Review DAPI masks, negative controls, near-cutoff
+No object-level expert annotations or matched negative-control images were
+provided for these reference runs; the auditor's approximate manual totals
+are described above. Review DAPI masks, negative controls, near-cutoff
 calls, and saturated RNA clusters. The dedicated review outputs include every
-accepted Cre-positive/Pnoc-below-cutoff object. QC flags remain broad and are
-not automatic biological exclusions or calibrated class-error probabilities.
+accepted Cre-positive/Pnoc-below-cutoff object. Informational QC flags remain
+available independently of the priority queue and are not automatic biological
+exclusions or calibrated class-error probabilities.
 
 Further work includes matched negative controls, sample/animal grouping,
 cytoplasmic cell-boundary information when whole-cell claims are intended,
 and separate validation of any future Z-stack or chance-overlap analysis.
 An independent software audit and matching reference counts do not establish
 biological sensitivity, specificity or a complete Pnoc-cell census.
+
+## Round-two export and review changes (v0.2.2)
+
+The reference image's segmentation, detected peak positions, assigned counts
+and expression classes are unchanged. The prioritization rule changes the
+expanded run's `nuclei_needing_review` from 955 to 413 of 1,554 accepted objects;
+this is a queue-size change, not an improvement in measured biological accuracy.
+All original reasons remain available in per-reason flags. DAPI saturation alone
+no longer causes priority review. Every one of the 12 expanded-region Cre-only
+objects remains included in the dedicated review pages.
+
+The single-image annotated overlay retains at least native resolution and IDs
+matching the cell table. ImageJ companion masks use direct µm calibration and
+losslessly preserve IDs; native uint32 masks are retained. The reference CZI
+reports 16 component bits, so metadata-based saturation resolves to the previous
+65535 ceiling and does not change its counts.

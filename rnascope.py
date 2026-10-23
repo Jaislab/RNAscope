@@ -30,7 +30,7 @@ from skimage import exposure, filters, measure, morphology, segmentation
 from skimage.feature import peak_local_max
 import tifffile
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 DEFAULT_CONFIG = {
     "channels": {
         "dapi": {"names": ["DAPI-T4", "DAPI"], "index": None, "fallback_index": 3},
@@ -82,10 +82,15 @@ DEFAULT_CONFIG = {
     "qc": {"saturation_value": None, "review_crops": 12, "crop_width_um": 45.0},
 }
 
+QC_FLAG_NAMES = ["irregular_nuclear_shape", "dapi_saturation", "pnoc_saturation", "cre_saturation",
+                 "pnoc_saturated_or_clustered_region", "cre_saturated_or_clustered_region",
+                 "saturated_signal", "large_bright_cluster", "near_expression_threshold",
+                 "near_pnoc_cutoff", "near_cre_cutoff", "saturated_pnoc_below_cutoff", "saturated_cre_below_cutoff"]
 NUCLEUS_FIELDS = ["file", "scene", "nucleus_id", "x_px", "y_px", "x_um", "y_um",
                   "area_um2", "solidity", "eccentricity", "dapi_contrast_ratio", "accepted", "exclusion_reason",
                   "pnoc_nuclear_spots", "cre_nuclear_spots", "pnoc_spots", "cre_spots",
-                  "pnoc_positive", "cre_positive", "classification", "needs_review", "qc_flags"]
+                  "pnoc_positive", "cre_positive", "classification", "needs_review", "review_reasons", "qc_flags",
+                  *[f"flag_{name}" for name in QC_FLAG_NAMES]]
 SPOT_FIELDS = ["file", "scene", "gene", "spot_id", "x_px", "y_px", "x_um", "y_um",
                "sigma_um", "response", "detection_snr", "contrast", "nucleus_id", "assignment_id", "counted", "qc_flags"]
 COUNT_FIELDS = ["total_nuclei", "excluded_nuclei", "pnoc_positive", "cre_positive",
@@ -224,10 +229,16 @@ def metadata_from_xml(xml: str):
     root = ET.fromstring(xml)
     channels = []
     for n in root.findall(".//Information/Image/Dimensions/Channels/Channel"):
+        bit_text = n.findtext("ComponentBitCount") or root.findtext(".//Information/Image/ComponentBitCount")
+        try:
+            bit_count = int(bit_text)
+        except (ValueError, TypeError):
+            bit_count = None
         channels.append({"name": n.get("Name", ""), "fluor": n.findtext("Fluor", ""),
                          "id": n.get("Id", ""),
                          "digital_gain": n.findtext("DetectorSettings/DigitalGain"),
-                         "detector_voltage": n.findtext("DetectorSettings/Voltage")})
+                         "detector_voltage": n.findtext("DetectorSettings/Voltage"),
+                         "component_bit_count": bit_count})
     sizes = {}
     for n in root.findall(".//Scaling/Items/Distance"):
         if n.get("Id") in ["X", "Y"]:
@@ -458,10 +469,15 @@ def robust_noise(a: np.ndarray) -> tuple[float, float]:
     return median, max(noise, np.finfo(np.float32).eps)
 
 
-def saturation_level(image, configured):
+def saturation_level(image, configured, component_bit_count=None):
     if configured is not None:
         return configured
-    return int(np.iinfo(image.dtype).max) if np.issubdtype(image.dtype, np.integer) else None
+    if np.issubdtype(image.dtype, np.integer):
+        storage = np.iinfo(image.dtype)
+        if isinstance(component_bit_count, int) and not isinstance(component_bit_count, bool) and 1 <= component_bit_count <= storage.bits:
+            return min((1 << component_bit_count) - 1, int(storage.max))
+        return int(storage.max)
+    return None
 
 
 def detect_spots(image: np.ndarray, spacing, config: dict, saturation=None):
@@ -591,6 +607,8 @@ def assign_and_classify(labels, nuclei, spots_by_gene, config, review_masks=None
             if owner:
                 lookup[owner][f"{gene}_spots"] += 1
                 flags[owner].update(filter(None, spot["qc_flags"].split(";")))
+                if "saturated_signal" in spot["qc_flags"].split(";"):
+                    flags[owner].add(f"{gene}_saturation")
     for key, mask in (review_masks or {}).items():
         for label in np.unique(assignment_labels[mask]):
             if label:
@@ -601,11 +619,21 @@ def assign_and_classify(labels, nuclei, spots_by_gene, config, review_masks=None
         n["pnoc_positive"], n["cre_positive"] = p, c
         n["classification"] = ("double_positive" if p and c else "pnoc_only" if p else
                                "cre_only" if c else "neither") if n["accepted"] else "excluded"
-        # Review both sides of the classification boundary.
-        if any(abs(n[f"{g}_spots"] - config[g]["positive_min_spots"]) <= 1 for g in ["pnoc", "cre"]):
-            flags[n["nucleus_id"]].add("near_expression_threshold")
-        n["qc_flags"] = ";".join(sorted(flags[n["nucleus_id"]]))
-        n["needs_review"] = bool(n["qc_flags"])
+        cell_flags = flags[n["nucleus_id"]]
+        reasons = []
+        for gene in ["pnoc", "cre"]:
+            count, cutoff = n[f"{gene}_spots"], config[gene]["positive_min_spots"]
+            if abs(count - cutoff) <= 1:
+                reasons.append(f"near_{gene}_cutoff")
+                cell_flags.add("near_expression_threshold")
+            if count < cutoff and f"{gene}_saturation" in cell_flags:
+                reasons.append(f"saturated_{gene}_below_cutoff")
+        cell_flags.update(reasons)
+        n["qc_flags"] = ";".join(sorted(cell_flags))
+        n["review_reasons"] = ";".join(reasons)
+        n["needs_review"] = bool(n["accepted"] and reasons)
+        for flag in QC_FLAG_NAMES:
+            n[f"flag_{flag}"] = flag in cell_flags
 
 
 def summarize(nuclei):
@@ -647,6 +675,47 @@ def display_scale(image):
     return np.clip((image.astype(np.float32) - lo) / max(float(hi - lo), 1), 0, 1)
 
 
+def write_imagej_labels(path, labels, spacing):
+    """Lossless Fiji companion: ImageJ accepts uint16 or float32, not uint32."""
+    maximum = int(labels.max(initial=0))
+    if maximum > 2 ** 24:
+        logging.getLogger("rnascope").warning("ImageJ companion omitted: label IDs exceed exact float32 range; native uint32 labels preserved")
+        return {"written": False, "reason": "IDs exceed exact ImageJ float32 range"}
+    data = labels.astype(np.uint16 if maximum <= 65535 else np.float32)
+    tifffile.imwrite(path, data, imagej=True, photometric="minisblack", resolutionunit="NONE",
+                     resolution=(1 / spacing[1], 1 / spacing[0]), metadata={"unit": "um", "axes": "YX"})
+    return {"written": True, "dtype": str(data.dtype), "unit": "um"}
+
+
+def save_annotated_overlay(out, rgb, boundaries, nuclei, spots):
+    import matplotlib.pyplot as plt
+    from matplotlib import patheffects
+    height, width = rgb.shape[:2]
+    scale = 2 if max(height, width) < 2048 else 1
+    fig = plt.figure(figsize=(width / 100, height / 100), dpi=100 * scale)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(rgb, interpolation="nearest")
+    ax.imshow(boundaries, interpolation="nearest")
+    for gene, color in [("pnoc", "lime"), ("cre", "#ff5588")]:
+        selected = [s for s in spots[gene] if s["counted"]]
+        if selected:
+            ax.scatter([s["x_px"] for s in selected], [s["y_px"] for s in selected],
+                       s=4, facecolors="none", edgecolors=color, linewidths=0.3)
+    for n in nuclei:
+        if n["accepted"]:
+            ax.text(n["x_px"], n["y_px"], str(n["nucleus_id"]), color=COLORS[n["classification"]],
+                    fontsize=6 / scale, ha="center", va="center",
+                    path_effects=[patheffects.withStroke(linewidth=0.65, foreground="black")])
+    ax.set_xlim(-0.5, width - 0.5); ax.set_ylim(height - 0.5, -0.5); ax.set_axis_off()
+    fig.savefig(out / "annotated_overlay.png", dpi=100 * scale)
+    fig.savefig(out / "annotated_overlay.pdf", dpi=100 * scale)
+    plt.close(fig)
+    write_json(out / "annotated_overlay_legend.json", {"source_size_yx": [height, width], "render_scale": scale,
+               "IDs": "accepted nucleus_id values in nuclei.csv", "label_colors": COLORS,
+               "channels": {"red": "Cre", "green": "Pnoc", "blue": "DAPI"},
+               "boundaries": {"white": "nuclei", "cyan": "expanded assignment, when enabled"}})
+
+
 def save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3_index=None, crop_count=12, crop_um=45,
             assignment_labels=None, expand_um=0):
     # Import only when rendering; matplotlib's Agg backend supports headless runs.
@@ -670,6 +739,7 @@ def save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3_index=None
     if expand_um:
         assignment_boundary = segmentation.find_boundaries(assignment_labels, mode="inner")
         overlay[assignment_boundary] = [0, 1, 1, 0.7]
+    save_annotated_overlay(out, rgb, overlay, nuclei, spots)
 
     def draw(ax, extent=None):
         ax.imshow(rgb)
@@ -733,7 +803,7 @@ def save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3_index=None
             draw(ax, extent)
             ax.text(x, y, str(n["nucleus_id"]), color="yellow", fontsize=9, ha="center")
             ax.set_title(f"ID {n['nucleus_id']} | Pnoc {n['pnoc_spots']} / Cre {n['cre_spots']}\n"
-                         f"{n['classification']} | {'review' if n['needs_review'] else 'no flags'}", fontsize=9)
+                         f"{n['classification']} | {'priority review' if n['needs_review'] else 'not in priority queue'}", fontsize=9)
         for ax in list(axs.flat)[len(chosen):]:
             ax.set_axis_off()
         fig.tight_layout(); fig.savefig(out / "review_crops.png", dpi=160); plt.close(fig)
@@ -801,12 +871,16 @@ def analyze_scene(image, spacing, config, channel_metadata, out, source, scene):
     spots, detection_info, masks = {}, {}, {}
     for gene in ["pnoc", "cre"]:
         raw = image[channels[gene]]
-        level = saturation_level(raw, config["qc"]["saturation_value"])
+        bits = channel_metadata[channels[gene]].get("component_bit_count") if channel_metadata else None
+        level = saturation_level(raw, config["qc"]["saturation_value"], bits)
         spots[gene], detection_info[gene], mask = detect_spots(raw, spacing, config["spots"][gene], level)
         masks[f"{gene}_saturated_or_clustered_region"] = mask
+        if level is not None:
+            masks[f"{gene}_saturation"] = raw >= level
         if detection_info[gene]["saturated_pixels"]:
             warnings.append(f"{gene}: saturated pixels present; inspect clusters")
-    level = saturation_level(dapi, config["qc"]["saturation_value"])
+    bits = channel_metadata[channels["dapi"]].get("component_bit_count") if channel_metadata else None
+    level = saturation_level(dapi, config["qc"]["saturation_value"], bits)
     if level is not None:
         masks["dapi_saturation"] = dapi >= level
     assign_and_classify(labels, nuclei, spots, config["spots"], masks, assignments)
@@ -825,18 +899,22 @@ def analyze_scene(image, spacing, config, channel_metadata, out, source, scene):
     write_csv(out / "nuclei.csv", nuclei, NUCLEUS_FIELDS)
     write_csv(out / "spots.csv", [s for gene in spots.values() for s in gene], SPOT_FIELDS)
     write_json(out / "summary.json", summary)
-    write_json(out / "metadata.json", {"pixel_size_yx_um": spacing, "channels": channel_metadata,
+    scene_metadata = {"pixel_size_yx_um": spacing, "channels": channel_metadata,
                                        "resolved_channels": channels, "segmentation": segmentation_info,
                                        "spot_detection": detection_info,
                                        "assignment": {"expand_um": expand_um, "blocked_excluded_nuclei": True},
-                                       "coordinate_origin": "top-left of reconstructed scene; x=column, y=row"})
+                      "review_policy": "accepted objects within +/-1 peak of either cutoff, or saturated RNA below that gene cutoff; other flags informational",
+                      "coordinate_origin": "top-left of reconstructed scene; x=column, y=row"}
     tifffile.imwrite(out / "nuclei_labels.tif", labels.astype(np.uint32), photometric="minisblack",
                      resolution=(10000 / spacing[1], 10000 / spacing[0]), resolutionunit="CENTIMETER",
                      metadata={"axes": "YX", "unit": "um", "pixel_size_yx_um": spacing})
+    scene_metadata["imagej_labels"] = {"nuclei": write_imagej_labels(out / "nuclei_labels_imagej.tif", labels, spacing)}
     if expand_um:
         tifffile.imwrite(out / "assignment_labels.tif", assignments.astype(np.uint32), photometric="minisblack",
                          resolution=(10000 / spacing[1], 10000 / spacing[0]), resolutionunit="CENTIMETER",
                          metadata={"axes": "YX", "unit": "um", "expand_um": expand_um})
+        scene_metadata["imagej_labels"]["assignment"] = write_imagej_labels(out / "assignment_labels_imagej.tif", assignments, spacing)
+    write_json(out / "metadata.json", scene_metadata)
     cy3 = next((i for i, m in enumerate(channel_metadata)
                 if normalize_name(m["fluor"]) == "cy3" or normalize_name(m["name"]) == "cy3t2"), None)
     save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3,

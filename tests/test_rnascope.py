@@ -25,6 +25,19 @@ def gaussian_spots(shape, positions, sigma=1.2, amplitude=2000, noise=0):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_channel_bit_depth_metadata_and_saturation_override(self):
+        xml = '''<ImageDocument><Metadata><Information><Image><ComponentBitCount>14</ComponentBitCount>
+        <Dimensions><Channels><Channel Name="Cy5"><ComponentBitCount>12</ComponentBitCount></Channel>
+        <Channel Name="DAPI"/></Channels></Dimensions></Image></Information></Metadata></ImageDocument>'''
+        channels, _ = rn.metadata_from_xml(xml)
+        self.assertEqual([c["component_bit_count"] for c in channels], [12, 14])
+        raw = np.array([[0, 4095]], np.uint16)
+        self.assertEqual(rn.saturation_level(raw, None, 12), 4095)
+        self.assertEqual(rn.saturation_level(raw, None, 14), 16383)
+        self.assertEqual(rn.saturation_level(raw, None), 65535)
+        self.assertEqual(rn.saturation_level(raw, 4000, 12), 4000)
+        self.assertEqual(rn.saturation_level(raw, None, 32), 65535)
+
     def test_no_config_cannot_silently_select_a_method(self):
         error = io.StringIO()
         with patch.object(rn, "run_batch") as run, redirect_stderr(error), self.assertRaises(SystemExit) as exc:
@@ -172,6 +185,27 @@ class DetectionTests(unittest.TestCase):
 
 
 class CountingTests(unittest.TestCase):
+    def test_priority_review_separates_information_and_cutoff_risk(self):
+        labels = np.zeros((12, 60), np.int32)
+        nuclei = []
+        spots = {"pnoc": [], "cre": []}
+        for i, pnoc_count in enumerate([8, 2, 0, 8, 2], 1):
+            x = (i - 1) * 12 + 3
+            labels[:, (i - 1) * 12:(i - 1) * 12 + 10] = i
+            nuclei.append({"nucleus_id": i, "accepted": i != 5,
+                           "qc_flags": "irregular_nuclear_shape" if i == 1 else ""})
+            for gene, count in [("pnoc", pnoc_count), ("cre", 8)]:
+                spots[gene].extend({"x_px": x, "y_px": y + 1, "qc_flags": ""} for y in range(count))
+        masks = {"dapi_saturation": labels == 1, "pnoc_saturation": (labels == 3) | (labels == 4)}
+        rn.assign_and_classify(labels, nuclei, spots, rn.DEFAULT_CONFIG["spots"], masks)
+        self.assertEqual([n["needs_review"] for n in nuclei], [False, True, True, False, False])
+        self.assertTrue(nuclei[0]["flag_dapi_saturation"])
+        self.assertTrue(nuclei[0]["flag_irregular_nuclear_shape"])
+        self.assertTrue(nuclei[1]["flag_near_pnoc_cutoff"])
+        self.assertTrue(nuclei[2]["flag_saturated_pnoc_below_cutoff"])
+        self.assertTrue(nuclei[3]["flag_pnoc_saturation"])
+        self.assertEqual(rn.summarize(nuclei)["nuclei_needing_review"], 2)
+
     def test_expansion_preserves_nuclear_counts_and_blocks_rejected_objects(self):
         labels = np.zeros((15, 30), np.int32)
         labels[5:10, 5:10] = 1; labels[5:10, 15:20] = 2; labels[5:10, 23:26] = 3
@@ -227,6 +261,25 @@ class CountingTests(unittest.TestCase):
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_imagej_companions_preserve_ids_and_micrometer_calibration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for values in [[0, 1, 65535], [0, 65536, 2 ** 24]]:
+                labels = np.array([values, values], np.uint32)
+                path = Path(directory) / "labels.tif"
+                status = rn.write_imagej_labels(path, labels, (0.6, 0.4))
+                self.assertTrue(status["written"])
+                with rn.tifffile.TiffFile(path) as tif:
+                    self.assertTrue(tif.is_imagej)
+                    self.assertEqual(tif.imagej_metadata["unit"], "um")
+                    numerator, denominator = tif.pages[0].tags["XResolution"].value
+                    self.assertAlmostEqual(denominator / numerator, 0.4)
+                    np.testing.assert_array_equal(tif.asarray(), labels)
+            path = Path(directory) / "too_many.tif"
+            with self.assertLogs("rnascope", level="WARNING"):
+                status = rn.write_imagej_labels(path, np.array([[2 ** 24 + 1]], np.uint32), (1, 1))
+            self.assertFalse(status["written"])
+            self.assertFalse(path.exists())
+
     def test_missing_package_metadata_uses_module_version(self):
         with patch.object(rn.importlib.metadata, "version", side_effect=rn.importlib.metadata.PackageNotFoundError), \
              patch.object(rn.importlib, "import_module", return_value=SimpleNamespace(__version__="2.21.0")):
@@ -295,8 +348,13 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(summary["double_positive"], 1)
             self.assertEqual(summary["pct_pnoc_expressing_cre"], 50)
             self.assertEqual(summary["pct_cre_expressing_pnoc"], 100)
-            for name in ["spots.csv", "nuclei.csv", "nuclei_labels.tif", "metadata.json", "qc_overview.png", "review_crops.png"]:
+            for name in ["spots.csv", "nuclei.csv", "nuclei_labels.tif", "nuclei_labels_imagej.tif", "metadata.json",
+                         "qc_overview.png", "review_crops.png", "annotated_overlay.png", "annotated_overlay.pdf"]:
                 self.assertGreater((out / name).stat().st_size, 0)
+            from PIL import Image
+            with Image.open(out / "annotated_overlay.png") as png:
+                self.assertGreaterEqual(png.width, shape[1])
+                self.assertGreaterEqual(png.height, shape[0])
             with rn.tifffile.TiffFile(out / "nuclei_labels.tif") as tif:
                 self.assertEqual(tif.pages[0].tags["ResolutionUnit"].value, 3)
                 numerator, denominator = tif.pages[0].tags["XResolution"].value
