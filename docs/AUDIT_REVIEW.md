@@ -47,7 +47,7 @@ accuracy benchmark.
 | Sparse Cre counts | Verified median 1 Cre peak among 371 detected Pnoc-positive objects, with 72.0% ≥1, 48.2% ≥2 and 29.4% ≥3. This describes detections, not the latent expression distribution. |
 | Specificity and efficiency interpretation | Documented detected RNA coexpression as the measurement. Functional recombination, reporter specificity and population labeling efficiency require distinct validation. Literature ranges and reporter experimental designs in the report are not software validation evidence. |
 
-All 30 current tests pass, including custom cutoffs and endpoint-tier export.
+All 30 v0.2.3 analysis tests pass, including custom cutoffs and endpoint-tier export.
 Both actual CPU profiles preserve their reference masks, peaks and expression
 counts. The new tiers only change review order and add output columns/files.
 

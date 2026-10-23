@@ -150,14 +150,29 @@ replicates; group results by animal/sample using the experimental design.
 
 ## Verification and audit
 
+To compare RNA-positivity cutoffs and counting radii using an existing complete
+run, without rerunning segmentation or changing settings:
+
+```bash
+python sweep_parameters.py --results results_expanded --output results_sweep
+```
+
+The reference [324-setting sensitivity analysis](docs/SENSITIVITY.md) shows why a
+higher percentage can reflect a smaller Cre-positive denominator. Pnoc ≥2 /
+Cre ≥3 at 2 µm gives 114/121 (94.21%); this is a candidate for manual validation,
+not an accuracy optimum or a change to the production profile.
+
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-The 30 tests cover software behavior, all shipped profiles, missing version
+The 34 tests cover software behavior, all shipped profiles, missing version
 metadata, explicit profile selection, priority/informational QC separation,
 Cre-endpoint triage, bit-depth saturation, lossless ImageJ masks and production-profile exports with
 mocked nucleus inference. Actual StarDist inference was also executed on
 the reference CZI. Passing tests are not a biological sensitivity/specificity
 benchmark. See the [audit response](docs/AUDIT_REVIEW.md) for implemented fixes
 and outstanding recommendations, and the [changelog](CHANGELOG.md).
+Sweep tests additionally cover independent cutoffs, fixed-group comparisons,
+physical reassignment, excluded-mask blocking, baseline reproduction and
+weighted multi-scene totals.

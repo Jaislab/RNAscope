@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased: parameter sensitivity utility
+
+- Add `sweep_parameters.py` to reuse complete analysis exports across independent
+  gene cutoffs and assignment radii, with baseline reproduction checks and hashes.
+- Report full numerators/denominators, fixed-baseline Cre-group comparisons,
+  per-object counts, weighted batch totals and PNG/PDF sensitivity plots.
+- Document 324 settings on the reference section and a five-object Pnoc ≥2
+  validation candidate; retain production profiles and all core analysis behavior.
+- Add four sweep tests; 34 tests pass in total.
+
 ## 0.2.3
 
 - Correct attribution: two lab researchers performed the manual counts relayed

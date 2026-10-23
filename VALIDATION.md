@@ -97,7 +97,7 @@ biological ground truth. The earlier watershed/LoG result is documented in
 
 ## Software evidence
 
-All **30 tests pass** in the tested Python 3.12/Linux environment. Tests cover
+All **34 tests pass** in the tested Python 3.12/Linux environment. Tests cover
 known peaks and background noise, explicit profiles, every shipped JSON, default
 profile export, missing distribution metadata, early environment failure,
 production-profile exports with mocked nucleus inference, thresholds, region
@@ -176,3 +176,13 @@ that only the first tier can change the endpoint.
 The nucleus-only profile queues 362 objects, of which 63 are in the Cre-endpoint
 tier; 20 of those are near the Pnoc cutoff. All Cre-only objects still receive
 dedicated review pages. No queue/tier flag changes a cell's automated class.
+
+## Parameter sensitivity
+
+The subsequent [324-setting sweep](docs/SENSITIVITY.md) reuses these exported
+masks and peaks while changing independent per-gene cutoffs (≥1–6) and counting
+radius (0–4 µm). It reproduces baseline per-object and summary counts before
+comparisons, preserves the production settings and reports numerator/denominator
+counts plus a fixed baseline Cre group. Four additional tests cover sweep
+behavior and multi-scene aggregation. Higher fractions are not taken as proof
+of more accurate segmentation or positivity thresholds.
