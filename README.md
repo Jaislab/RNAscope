@@ -58,6 +58,10 @@ Pnoc-positive or Cre-positive cell population**. The reverse percentage,
 and should not be used as the fraction of all Pnoc cells expressing Cre.
 Neither conditional percentage is automatically an unbiased population estimate.
 
+The Cre-conditioned fraction describes **detected RNA coexpression**. It can
+inform Cre-driver characterization, but does not directly measure functional
+recombination, reporter specificity, or the efficiency of labeling all Pnoc cells.
+
 ## Nuclear overlap versus a surrounding region
 
 | Profile | Counting region | Interpretation |
@@ -105,6 +109,8 @@ percentage enters the algorithm. See [methods](docs/METHODS.md) and
   percentages, active profile, assignment radius and failures.
 - `images/<CZI-filename>/scene_<id>/nuclei.csv`: accepted and excluded masks,
   nuclear and assigned-region peak counts, classes and QC flags.
+- `review_queue.csv`: all queued objects, with the `cre_endpoint` tier first.
+  IDs and per-reason flags match `nuclei.csv`.
 - `spots.csv`, `nuclei_labels.tif`, and optionally `assignment_labels.tif`:
   individual detections and their exact assignments.
 - `annotated_overlay.png` / `.pdf`: a single full-image overlay at at least
@@ -118,14 +124,22 @@ percentage enters the algorithm. See [methods](docs/METHODS.md) and
 - `config_used.json`, `run_manifest.json`, `metadata.json`, `run.log`: parameters,
   hashes, versions, channel mappings, calibration and diagnostics.
 
-`needs_review` is now a **priority queue**: accepted objects within ±1 peak
+`needs_review` marks accepted objects within ±1 peak
 of either cutoff, or below a gene's cutoff with saturated RNA signal for that
-gene. `review_reasons` explains priority; separate `flag_*` columns retain every
+gene. `review_reasons` explains the conditions; separate `flag_*` columns retain every
 reason, including informational DAPI saturation and irregular mask shape.
 Informational flags alone do not add an object to the queue. This is a review
 heuristic, not an error probability or exclusion rule; it does not capture
 every possible segmentation problem. Every Cre-only object still gets a review
-page, whether or not it is in the priority queue.
+page, whether or not it is queued.
+
+`review_priority` is `cre_endpoint` for queued Cre-positive objects, `general`
+for other queued objects, and `none` otherwise. The expanded example has
+**77 Cre-endpoint objects out of 413 queued**; 22 of those 77 are near the Pnoc
+cutoff. Near-Cre-cutoff calls can affect the denominator too. The general tier
+remains relevant: below-cutoff Cre objects could become positive after review.
+Summary column `nuclei_cre_endpoint_review` counts the first tier. Review crops
+retain class examples and prioritize the Cre tier among the selected objects.
 
 Saturation honors an explicit override, then CZI `ComponentBitCount`, then the
 integer storage limit. Saturated clusters are not converted to invented counts.
@@ -140,9 +154,9 @@ replicates; group results by animal/sample using the experimental design.
 python -m unittest discover -s tests -v
 ```
 
-The 29 tests cover software behavior, all shipped profiles, missing version
+The 30 tests cover software behavior, all shipped profiles, missing version
 metadata, explicit profile selection, priority/informational QC separation,
-bit-depth saturation, lossless ImageJ masks and production-profile exports with
+Cre-endpoint triage, bit-depth saturation, lossless ImageJ masks and production-profile exports with
 mocked nucleus inference. Actual StarDist inference was also executed on
 the reference CZI. Passing tests are not a biological sensitivity/specificity
 benchmark. See the [audit response](docs/AUDIT_REVIEW.md) for implemented fixes

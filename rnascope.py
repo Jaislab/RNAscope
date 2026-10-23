@@ -30,7 +30,7 @@ from skimage import exposure, filters, measure, morphology, segmentation
 from skimage.feature import peak_local_max
 import tifffile
 
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 DEFAULT_CONFIG = {
     "channels": {
         "dapi": {"names": ["DAPI-T4", "DAPI"], "index": None, "fallback_index": 3},
@@ -89,12 +89,12 @@ QC_FLAG_NAMES = ["irregular_nuclear_shape", "dapi_saturation", "pnoc_saturation"
 NUCLEUS_FIELDS = ["file", "scene", "nucleus_id", "x_px", "y_px", "x_um", "y_um",
                   "area_um2", "solidity", "eccentricity", "dapi_contrast_ratio", "accepted", "exclusion_reason",
                   "pnoc_nuclear_spots", "cre_nuclear_spots", "pnoc_spots", "cre_spots",
-                  "pnoc_positive", "cre_positive", "classification", "needs_review", "review_reasons", "qc_flags",
+                  "pnoc_positive", "cre_positive", "classification", "needs_review", "review_priority", "review_reasons", "qc_flags",
                   *[f"flag_{name}" for name in QC_FLAG_NAMES]]
 SPOT_FIELDS = ["file", "scene", "gene", "spot_id", "x_px", "y_px", "x_um", "y_um",
                "sigma_um", "response", "detection_snr", "contrast", "nucleus_id", "assignment_id", "counted", "qc_flags"]
 COUNT_FIELDS = ["total_nuclei", "excluded_nuclei", "pnoc_positive", "cre_positive",
-                "double_positive", "pnoc_only", "cre_only", "neither", "nuclei_needing_review"]
+                "double_positive", "pnoc_only", "cre_only", "neither", "nuclei_needing_review", "nuclei_cre_endpoint_review"]
 SUMMARY_FIELDS = ["file", "scene", "status", *COUNT_FIELDS,
                   "pct_pnoc_expressing_cre", "pct_cre_expressing_pnoc", "assignment_expand_um", "analysis_profile", "warnings", "error"]
 COLORS = {"neither": "#a0a0a0", "pnoc_only": "#00dd66", "cre_only": "#ff5577",
@@ -632,8 +632,15 @@ def assign_and_classify(labels, nuclei, spots_by_gene, config, review_masks=None
         n["qc_flags"] = ";".join(sorted(cell_flags))
         n["review_reasons"] = ";".join(reasons)
         n["needs_review"] = bool(n["accepted"] and reasons)
+        n["review_priority"] = ("cre_endpoint" if c else "general") if n["needs_review"] else "none"
         for flag in QC_FLAG_NAMES:
             n[f"flag_{flag}"] = flag in cell_flags
+
+
+def review_sort_key(nucleus):
+    """Triage observed Cre-positive objects first without changing their calls."""
+    tier = {"cre_endpoint": 0, "general": 1, "none": 2}[nucleus["review_priority"]]
+    return tier, -nucleus["pnoc_spots"] - nucleus["cre_spots"], nucleus["nucleus_id"]
 
 
 def summarize(nuclei):
@@ -641,7 +648,8 @@ def summarize(nuclei):
     result = {"total_nuclei": len(accepted), "excluded_nuclei": len(nuclei) - len(accepted),
               "pnoc_positive": sum(n["pnoc_positive"] for n in accepted),
               "cre_positive": sum(n["cre_positive"] for n in accepted),
-              "nuclei_needing_review": sum(n["needs_review"] for n in accepted)}
+              "nuclei_needing_review": sum(n["needs_review"] for n in accepted),
+              "nuclei_cre_endpoint_review": sum(n["review_priority"] == "cre_endpoint" for n in accepted)}
     for group in ["double_positive", "pnoc_only", "cre_only", "neither"]:
         result[group] = sum(n["classification"] == group for n in accepted)
     return add_percentages(result)
@@ -786,13 +794,13 @@ def save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3_index=None
     candidates = [n for n in nuclei if n["accepted"]]
     # Include each class, then prioritized ambiguous objects; deterministic selection.
     chosen = []
-    ranked = sorted(candidates, key=lambda n: (not n["needs_review"], -n["pnoc_spots"] - n["cre_spots"], n["nucleus_id"]))
+    ranked = sorted(candidates, key=review_sort_key)
     for group in ["double_positive", "pnoc_only", "cre_only", "neither"]:
         representative = next((n for n in ranked if n["classification"] == group), None)
         if representative is not None and len(chosen) < crop_count:
             chosen.append(representative)
     chosen.extend(n for n in ranked if n not in chosen)
-    chosen = chosen[:crop_count]
+    chosen = sorted(chosen[:crop_count], key=review_sort_key)
     if chosen:
         columns = min(4, len(chosen)); rows = math.ceil(len(chosen) / columns)
         fig, axs = plt.subplots(rows, columns, figsize=(4 * columns, 4.4 * rows), squeeze=False)
@@ -803,7 +811,7 @@ def save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3_index=None
             draw(ax, extent)
             ax.text(x, y, str(n["nucleus_id"]), color="yellow", fontsize=9, ha="center")
             ax.set_title(f"ID {n['nucleus_id']} | Pnoc {n['pnoc_spots']} / Cre {n['cre_spots']}\n"
-                         f"{n['classification']} | {'priority review' if n['needs_review'] else 'not in priority queue'}", fontsize=9)
+                         f"{n['classification']} | review: {n['review_priority']}", fontsize=9)
         for ax in list(axs.flat)[len(chosen):]:
             ax.set_axis_off()
         fig.tight_layout(); fig.savefig(out / "review_crops.png", dpi=160); plt.close(fig)
@@ -897,6 +905,7 @@ def analyze_scene(image, spacing, config, channel_metadata, out, source, scene):
             s.update(file=source, scene=str(scene), gene=gene)
     out.mkdir(parents=True, exist_ok=False)
     write_csv(out / "nuclei.csv", nuclei, NUCLEUS_FIELDS)
+    write_csv(out / "review_queue.csv", sorted((n for n in nuclei if n["needs_review"]), key=review_sort_key), NUCLEUS_FIELDS)
     write_csv(out / "spots.csv", [s for gene in spots.values() for s in gene], SPOT_FIELDS)
     write_json(out / "summary.json", summary)
     scene_metadata = {"pixel_size_yx_um": spacing, "channels": channel_metadata,
@@ -904,6 +913,7 @@ def analyze_scene(image, spacing, config, channel_metadata, out, source, scene):
                                        "spot_detection": detection_info,
                                        "assignment": {"expand_um": expand_um, "blocked_excluded_nuclei": True},
                       "review_policy": "accepted objects within +/-1 peak of either cutoff, or saturated RNA below that gene cutoff; other flags informational",
+                      "review_priority_policy": "cre_endpoint: queued Cre-positive objects; general: other queued objects; none: not queued; triage does not alter expression calls",
                       "coordinate_origin": "top-left of reconstructed scene; x=column, y=row"}
     tifffile.imwrite(out / "nuclei_labels.tif", labels.astype(np.uint32), photometric="minisblack",
                      resolution=(10000 / spacing[1], 10000 / spacing[0]), resolutionunit="CENTIMETER",

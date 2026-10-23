@@ -60,13 +60,21 @@ localization contrast. They also do not prove identical biological localization:
 peak thresholds, optical resolution, background and the mask definition affect
 the observed distribution. The earlier strong localization wording was removed.
 
-The round-two auditor reports two independent manual coexpression counts of
-approximately 90%. That is useful external context for the Cre-conditioned
-endpoint. Individual annotations, matching object IDs and full denominators
-were not provided in the report, so no cell-by-cell sensitivity/specificity or
+Two researchers in the lab performed manual coexpression counts of approximately
+90%; the auditor relayed those results and did not perform the counts.
+That is useful context for the Cre-conditioned endpoint. Individual annotations,
+matching object IDs, cell denominators, and numbers of sections/animals were
+not supplied, so no cell-by-cell sensitivity/specificity or
 formal uncertainty comparison is claimed. The reverse automated percentage is
 particularly vulnerable to under-detection of low-Cre cells; its full discrepancy
 from reported manual counting has not been assigned to one proven mechanism.
+
+In the expanded run's 371 detected Pnoc-positive objects, the median assigned
+Cre peak count is 1: 267/371 (72.0%) have ≥1 Cre peak, 179/371 (48.2%) have ≥2,
+and 109/371 (29.4%) meet the ≥3 criterion. These observed counts illustrate
+cutoff sensitivity; they do not establish the true Cre-expression distribution
+or the cause of low counts. RNA coexpression is not a functional recombination
+or reporter-labeling assay.
 
 ## Reference implementation comparison
 
@@ -89,7 +97,7 @@ biological ground truth. The earlier watershed/LoG result is documented in
 
 ## Software evidence
 
-All **29 tests pass** in the tested Python 3.12/Linux environment. Tests cover
+All **30 tests pass** in the tested Python 3.12/Linux environment. Tests cover
 known peaks and background noise, explicit profiles, every shipped JSON, default
 profile export, missing distribution metadata, early environment failure,
 production-profile exports with mocked nucleus inference, thresholds, region
@@ -97,6 +105,8 @@ assignment, excluded-object blocking, percentages, failures and file outputs.
 New tests separate priority and informational flags, exercise component-bit
 saturation, verify ImageJ calibration and exact IDs at dtype boundaries, and
 check that the annotated overlay retains at least native image resolution.
+Cre-endpoint triage is tested for both genes' cutoffs, custom thresholds,
+saturation below cutoff, excluded objects, ordering, summary counts and export.
 
 Actual CPU inference with official `2D_versatile_fluo` weights was executed on
 the reference CZI. Registered archive checksum and TLS verification were
@@ -119,7 +129,7 @@ analysis, instead of selecting historical parameters.
 ## Experimental work still needed
 
 No object-level expert annotations or matched negative-control images were
-provided for these reference runs; the auditor's approximate manual totals
+provided for these reference runs; the lab researchers' approximate manual totals
 are described above. Review DAPI masks, negative controls, near-cutoff
 calls, and saturated RNA clusters. The dedicated review outputs include every
 accepted Cre-positive/Pnoc-below-cutoff object. Informational QC flags remain
@@ -147,3 +157,22 @@ matching the cell table. ImageJ companion masks use direct µm calibration and
 losslessly preserve IDs; native uint32 masks are retained. The reference CZI
 reports 16 component bits, so metadata-based saturation resolves to the previous
 65535 ceiling and does not change its counts.
+
+## Round-three attribution and review tiers (v0.2.3)
+
+The lab researchers' manual counts are correctly attributed above. Segmentation,
+peak detection, assignments and expression classes remain unchanged.
+
+The expanded `review_queue.csv` contains the existing 413 queued objects,
+ordered with 77 currently Cre-positive objects (`review_priority=cre_endpoint`)
+before 336 others (`general`). The first tier contains 67 double-positive and
+10 Cre-only objects. The round-three report described all 77 as near the Pnoc
+cutoff; the CSV shows only 22 meet that condition (17 double-positive, 5 Cre-only).
+The broader 77 includes objects queued for near-Cre counts or saturated Pnoc
+below cutoff. Near-Cre counts affect the observed denominator, and the general
+tier can also contain missed Cre-positive objects. This triage does not claim
+that only the first tier can change the endpoint.
+
+The nucleus-only profile queues 362 objects, of which 63 are in the Cre-endpoint
+tier; 20 of those are near the Pnoc cutoff. All Cre-only objects still receive
+dedicated review pages. No queue/tier flag changes a cell's automated class.

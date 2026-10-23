@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.3
+
+- Correct attribution: two lab researchers performed the manual counts relayed
+  by the auditor; cell, section and animal denominators remain unavailable.
+- Prioritize queued Cre-positive objects with `review_priority=cre_endpoint`,
+  export a complete sorted `review_queue.csv`, and summarize that tier's size.
+- Distinguish the 77 expanded Cre-endpoint review objects from the 22 near the
+  Pnoc cutoff; retain general review and every Cre-only review page.
+- Document measured low Cre counts and distinguish RNA coexpression from
+  functional recombination or reporter-based labeling efficiency.
+- Preserve segmentation, detection, assignments and expression counts; add
+  tests for configurable-cutoff triage and exported tiers.
+
 ## 0.2.2
 
 - Replace the strong localization contrast with measured detected-peak fractions

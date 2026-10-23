@@ -1,6 +1,7 @@
 """Behavioral tests with known spot locations and classifications."""
 import copy
 from contextlib import redirect_stderr
+import csv
 import io
 import json
 from pathlib import Path
@@ -185,6 +186,30 @@ class DetectionTests(unittest.TestCase):
 
 
 class CountingTests(unittest.TestCase):
+    def test_cre_endpoint_tier_covers_both_cutoffs_and_respects_config(self):
+        config = rn.merge_config({"spots": {"pnoc": {"positive_min_spots": 5},
+                                             "cre": {"positive_min_spots": 4}}})["spots"]
+        labels = np.zeros((12, 84), np.int32)
+        nuclei, spots = [], {"pnoc": [], "cre": []}
+        cases = [(4, 8, True), (9, 4, True), (9, 3, True), (9, 8, True),
+                 (4, 8, False), (0, 8, True), (4, 0, True)]
+        for i, (pnoc, cre, accepted) in enumerate(cases, 1):
+            x = (i - 1) * 12 + 3
+            labels[:, x:x + 5] = i
+            nuclei.append({"nucleus_id": i, "accepted": accepted})
+            for gene, count in [("pnoc", pnoc), ("cre", cre)]:
+                spots[gene].extend({"x_px": x, "y_px": y, "qc_flags": ""} for y in range(count))
+        rn.assign_and_classify(labels, nuclei, spots, config, {"pnoc_saturation": labels == 6})
+        self.assertEqual([n["review_priority"] for n in nuclei],
+                         ["cre_endpoint", "cre_endpoint", "general", "none", "none", "cre_endpoint", "general"])
+        self.assertEqual([n["classification"] for n in nuclei],
+                         ["cre_only", "double_positive", "pnoc_only", "double_positive", "excluded", "cre_only", "neither"])
+        queued = sorted((n for n in nuclei if n["needs_review"]), key=rn.review_sort_key)
+        self.assertEqual([n["nucleus_id"] for n in queued], [2, 1, 6, 3, 7])
+        summary = rn.summarize(nuclei)
+        self.assertEqual(summary["nuclei_needing_review"], 5)
+        self.assertEqual(summary["nuclei_cre_endpoint_review"], 3)
+
     def test_priority_review_separates_information_and_cutoff_risk(self):
         labels = np.zeros((12, 60), np.int32)
         nuclei = []
@@ -325,6 +350,12 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(result["pct_cre_expressing_pnoc"], 100)
             self.assertIn("stardist/CLAHE", result["analysis_profile"])
             self.assertTrue((out / "assignment_labels.tif").exists())
+            self.assertEqual(result["nuclei_cre_endpoint_review"], 1)
+            with (out / "review_queue.csv").open() as stream:
+                queue = list(csv.DictReader(stream))
+            self.assertEqual(len(queue), 1)
+            self.assertEqual(queue[0]["review_priority"], "cre_endpoint")
+            self.assertEqual(queue[0]["nucleus_id"], "1")
 
     def test_known_nuclei_to_exported_results(self):
         shape = (150, 150)

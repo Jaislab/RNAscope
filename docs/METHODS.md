@@ -21,6 +21,13 @@ individual peaks to overlap. Counts are detections, not calibrated transcript
 abundances. Different gains/laser settings prevent direct abundance comparison
 across channels without additional calibration.
 
+The conditional Cre-positive → Pnoc-positive fraction can inform driver-line
+characterization as detected RNA coexpression. Cre mRNA is not a direct assay of
+functional recombination or of labeling efficiency across the Pnoc population.
+A Cre-dependent reporter is a distinct readout that requires separate validation
+and probe-specific names in outputs; current Cre outputs must not be relabeled
+as reporter measurements merely by changing a channel index.
+
 ## Image reading and calibration
 
 The reader reconstructs individual CZI scenes with C/Y/X axes. Non-singleton
@@ -98,6 +105,16 @@ shape, or a saturated RNA-positive object above cutoff remain informational
 unless a priority condition also applies. This is a triage rule, not a claim
 that other masks/classes cannot be wrong. Review all Cre-positive/Pnoc-below-
 cutoff objects in the dedicated pages, plus representative positives/negatives.
+
+Queued objects have `review_priority=cre_endpoint` when currently Cre-positive,
+or `general` otherwise; unqueued/excluded objects have `none`. `review_queue.csv`
+lists all queued objects in that order, with descending combined peak count
+and then nucleus ID for ties. Summary field `nuclei_cre_endpoint_review` counts
+the first tier. This rule covers near-Cre denominator changes as well as Pnoc
+classification uncertainty. The general tier also matters because below-cutoff
+Cre objects can cross into the denominator after review. Class-example crops
+are retained and ordered by tier; every Cre-only object still gets dedicated
+review pages. Triage flags never alter assignments, counts or expression calls.
 
 Native TIFF labels retain unsigned 32-bit IDs and pixels/cm calibration.
 ImageJ companions (`*_labels_imagej.tif`) use direct µm calibration: uint16

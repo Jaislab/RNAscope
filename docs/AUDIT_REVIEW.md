@@ -19,7 +19,7 @@ result is distinct from the local test simulating missing distribution metadata.
 |---|---|
 | Localization wording exceeded the evidence | Corrected in README, methods and validation. Recomputed candidate-mask fractions are 66.7% Cre / 65.4% Pnoc. Similar detected-peak distributions do not establish a strong localization contrast. |
 | Primary endpoint rationale | Retained Cre-positive → detectable Pnoc, explaining that sparse Cre detection and the ≥3 cutoff can depress the reverse percentage. Conditioning on detected Cre does not remove all selection bias. |
-| Manual counting context | The auditor's two approximate manual counts near 90% are attributed as reported evidence. No object-level labels/denominators were supplied for a formal accuracy calculation. |
+| Manual counting context | Two lab researchers performed approximate manual counts near 90%, relayed by the auditor. Attribution corrected in v0.2.3; no object-level labels/denominators were supplied for a formal accuracy calculation. |
 | Most cells flagged for review | Added separate boolean flags and `review_reasons`. `needs_review` now prioritizes near-cutoff counts or below-cutoff genes with saturated RNA. The expanded reference queue falls from 955 to 413; DAPI saturation alone remains informational. |
 | Overview too small for IDs | Added a single full-image PNG at native-or-higher resolution and a PDF with zoomable labels, matching accepted IDs in `nuclei.csv`. Existing overview/crops remain. |
 | Fiji mask calibration | Added `*_labels_imagej.tif` companions in µm, with lossless uint16/float32 IDs and explicit handling of IDs too large for exact ImageJ floats. Native uint32 masks remain authoritative. |
@@ -31,6 +31,25 @@ The review-queue count changes by design; it is not a biological accuracy gain.
 All 12 expanded-region Cre-positive/Pnoc-below-cutoff objects remain in dedicated
 review pages, regardless of priority. Informational flags stay accessible;
 absence from the priority queue does not establish that a mask/class is correct.
+
+## Round three: attribution and endpoint review (v0.2.3)
+
+The audit reports that all 29 v0.2.2 tests passed and both profiles reproduced
+the reference counts on Python 3.13 with `tensorflow-cpu`. This is external
+execution evidence, not a local cross-platform installation or biological
+accuracy benchmark.
+
+| Finding | Disposition |
+|---|---|
+| Manual counts misattributed | Credit the two lab researchers; the auditor only relayed the approximate 90% values. Cell, section and animal denominators are unavailable, so none are invented. |
+| Prioritize endpoint review | Added `review_priority`, a complete sorted `review_queue.csv`, and `nuclei_cre_endpoint_review` in summaries. The expanded first tier contains 77 currently Cre-positive queued objects; the other 336 queued objects remain accessible. |
+| Report calls all 77 near Pnoc cutoff | Checked the CSV: 22 are near Pnoc cutoff (17 double-positive, 5 Cre-only). The 77 include near-Cre and saturated-below-cutoff reasons as well. Near-Cre calls affect the denominator; general-tier calls may also affect it after review. |
+| Sparse Cre counts | Verified median 1 Cre peak among 371 detected Pnoc-positive objects, with 72.0% ≥1, 48.2% ≥2 and 29.4% ≥3. This describes detections, not the latent expression distribution. |
+| Specificity and efficiency interpretation | Documented detected RNA coexpression as the measurement. Functional recombination, reporter specificity and population labeling efficiency require distinct validation. Literature ranges and reporter experimental designs in the report are not software validation evidence. |
+
+All 30 current tests pass, including custom cutoffs and endpoint-tier export.
+Both actual CPU profiles preserve their reference masks, peaks and expression
+counts. The new tiers only change review order and add output columns/files.
 
 ## Remaining work and project decisions
 
