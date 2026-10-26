@@ -36,7 +36,7 @@ def main():
         info = json.loads((out / 'metadata.json').read_text())
         assert info['segmentation']['weights_sha256'] == rn.CELLPOSE_WEIGHTS_SHA256
         assert info['segmentation']['packages']['cellpose'] == '3.1.1.3'
-        assert info['segmentation']['diameter_px'] == config['nuclei']['cellpose_diameter_um'] / .69
+        assert info['segmentation']['diameter_px'] == 17.0
         nuclei = rn.tifffile.imread(out / 'nuclei_labels.tif')
         expanded = rn.tifffile.imread(out / 'assignment_labels.tif')
         assert np.count_nonzero(expanded) > np.count_nonzero(nuclei)

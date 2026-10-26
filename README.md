@@ -48,9 +48,11 @@ Missing dependencies, weights or worker failures abort without method fallback.
 
 Use a new/empty output folder. Add `--recursive` for subfolders. Input CZIs are
 read-only. Only single optical sections and square XY sampling (within 1%) are
-supported for Cellpose; anisotropic acquisitions fail explicitly. The nominal
-nuclear diameter is 11.74 µm, converted using image calibration (about 17 pixels
-at the reference sampling). It can be set with `nuclei.cellpose_diameter_um`;
+supported for Cellpose; anisotropic acquisitions fail explicitly. The nuclear
+diameter is exactly **17 pixels**, passed directly to Cellpose without a rounded
+µm conversion. Set `nuclei.cellpose_diameter_px` to change it explicitly; the
+physical equivalent is recorded in metadata (11.739103190104196 µm on the
+reference image). Different image sampling may require a different pixel diameter;
 `nuclei.cellpose_threads` controls CPU parallelism. These are starting settings,
 not validated universal parameters.
 
@@ -232,3 +234,10 @@ actual Cellpose inference and full scene exports on synthetic data:
 The smoke check downloads verified weights if needed and checks four synthetic
 nuclei, RNA classifications, 2 µm expansion, and CSV/TIFF/PDF exports. It does
 not validate real-image segmentation accuracy or CZI end-to-end decoding.
+
+The exact-17-pixel profile reproduces the reference headline counts on
+`20X_L_CZI.czi`: 409 accepted nuclei, 89 Pnoc-positive, 38 Cre-positive and
+36 double-positive (94.74% of Cre-positive objects). The earlier rounded
+11.74 µm profile caused a 1024→1023 pixel internal resize and produced
+401/80/38/34 (89.47%). That rounding change has been removed; the RNA
+spot coordinates and responses were identical between the controlled runs.

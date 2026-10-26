@@ -60,8 +60,8 @@
     "min_dapi_contrast": 1.15,
     "contrast_ring_inner_um": 1.5,
     "contrast_ring_outer_um": 3.5,
-    "cellpose_diameter_um": 11.74,
-    "cellpose_threads": 2
+    "cellpose_threads": 2,
+    "cellpose_diameter_px": 17.0
   },
   "spots": {
     "pnoc": {

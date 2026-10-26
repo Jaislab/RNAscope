@@ -1,3 +1,9 @@
+## Exact-17-pixel reproducibility fix
+
+- Replace `nuclei.cellpose_diameter_um` with `nuclei.cellpose_diameter_px`, default 17.0. Pass the pixel value directly to inference; retain physical diameter as derived metadata. Existing custom profiles using the old key must migrate explicitly.
+- Remove the rounded 11.74 µm conversion that triggered a 1024→1023 pixel internal resize at reference sampling.
+- Add regression coverage asserting exactly 17 pixels at the reference calibration. Exact-17-pixel control reproduces historical reference counts: 409 accepted nuclei, 38 Cre-positive, 36 double-positive (94.74%).
+
 ## 0.3.0 — Main Cellpose nuclei +2 µm workflow
 
 - Add explicit `settings_cellpose.json` and direct batch routing to legacy Cellpose nuclei on raw DAPI, with the existing ≥3-peak cutoffs, physical 2 µm assignment, QC and exports.

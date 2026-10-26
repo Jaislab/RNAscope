@@ -41,7 +41,7 @@ DEFAULT_CONFIG = {
     "assignment": {"expand_um": 0.0},
     "nuclei": {
         "method": "watershed",
-        "cellpose_diameter_um": 11.74,
+        "cellpose_diameter_px": 17.0,
         "cellpose_threads": 2,
         "threshold_method": "li",
         "smooth_sigma_um": 0.7,
@@ -372,13 +372,13 @@ def cellpose_labels(image, spacing, config):
     if not np.isclose(spacing[0], spacing[1], rtol=.01):
         raise ValueError("Cellpose currently requires square XY pixels (within 1%); resampling is not validated")
     model, info = load_cellpose_model(config["cellpose_threads"])
-    diameter = config["cellpose_diameter_um"] / float(np.mean(spacing))
+    diameter = config["cellpose_diameter_px"]
     labels, _, _ = model.eval(image, channels=[0, 0], channel_axis=None,
                              diameter=diameter, normalize={"percentile": [1., 99.]},
                              flow_threshold=.4, cellprob_threshold=0., min_size=15,
                              resample=True, augment=False, do_3D=False)
     return labels.astype(np.int32), {"method": "cellpose", **info,
-            "input": "raw DAPI only", "diameter_um": config["cellpose_diameter_um"],
+            "input": "raw DAPI only", "diameter_um": diameter * float(np.mean(spacing)),
             "diameter_px": diameter, "normalization_percentiles": [1., 99.],
             "flow_threshold": .4, "cellprob_threshold": 0., "min_size_px": 15,
             "resample": True, "augment": False, "do_3D": False}

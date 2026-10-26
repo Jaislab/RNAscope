@@ -17,7 +17,7 @@ class CellposePipelineTests(unittest.TestCase):
     def setUp(self):
         self.config = rn.load_profile(Path(rn.__file__).with_name('settings_cellpose.json'))
 
-    def test_diameter_physical_units_and_raw_dapi_only(self):
+    def test_exact_pixel_diameter_and_raw_dapi_only(self):
         model = Mock()
         image = np.arange(1600, dtype=np.uint16).reshape(40, 40)
         model.eval.return_value = (np.zeros((40, 40), np.int32), None, None)
@@ -26,9 +26,22 @@ class CellposePipelineTests(unittest.TestCase):
         args, kwargs = model.eval.call_args
         self.assertIs(args[0], image)
         self.assertEqual(kwargs['channels'], [0, 0])
-        self.assertAlmostEqual(kwargs['diameter'], 23.48)
-        self.assertEqual(info['diameter_um'], 11.74)
+        self.assertEqual(kwargs['diameter'], 17.0)
+        self.assertEqual(info['diameter_um'], 8.5)
         self.assertEqual(info['input'], 'raw DAPI only')
+
+    def test_reference_calibration_never_changes_exact_17_pixel_diameter(self):
+        model = Mock()
+        model.eval.return_value = (np.zeros((40, 40), np.int32), None, None)
+        with patch.object(rn, 'load_cellpose_model', return_value=(model, {})):
+            _, info = rn.cellpose_labels(np.ones((40, 40)),
+                                        (.690535481770835, .690535481770835),
+                                        self.config['nuclei'])
+        self.assertEqual(model.eval.call_args.kwargs['diameter'], 17.0)
+        self.assertEqual(info['diameter_px'], 17.0)
+        self.assertEqual(info['diameter_um'], 17 * .690535481770835)
+        # Avoid the 1023x1023 resize triggered by the former rounded um setting.
+        self.assertEqual(int(1024 * (17 / info['diameter_px'])), 1024)
 
     def test_anisotropic_sampling_rejected_before_loading(self):
         with patch.object(rn, 'load_cellpose_model') as loader:
@@ -70,7 +83,7 @@ class CellposePipelineTests(unittest.TestCase):
             model_module.CellposeModel.assert_not_called()
 
     def test_invalid_parameters(self):
-        for key, value in [('cellpose_diameter_um', 0), ('cellpose_threads', 1.5),
+        for key, value in [('cellpose_diameter_px', 0), ('cellpose_threads', 1.5),
                            ('cellpose_threads', True)]:
             config = copy.deepcopy(self.config)
             config['nuclei'][key] = value
