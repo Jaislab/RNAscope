@@ -30,7 +30,7 @@ from skimage import exposure, filters, measure, morphology, segmentation
 from skimage.feature import peak_local_max
 import tifffile
 
-VERSION = "0.2.3"
+VERSION = "0.3.0"
 DEFAULT_CONFIG = {
     "channels": {
         "dapi": {"names": ["DAPI-T4", "DAPI"], "index": None, "fallback_index": 3},
@@ -41,6 +41,8 @@ DEFAULT_CONFIG = {
     "assignment": {"expand_um": 0.0},
     "nuclei": {
         "method": "watershed",
+        "cellpose_diameter_um": 11.74,
+        "cellpose_threads": 2,
         "threshold_method": "li",
         "smooth_sigma_um": 0.7,
         "background_sigma_um": 12.0,
@@ -140,13 +142,15 @@ def validate_config(config: dict) -> None:
     n = config["nuclei"]
     for key, value in n.items():
         if key == "method":
-            if value not in ["watershed", "local_watershed", "stardist"]:
-                raise ValueError("nuclei.method must be watershed, local_watershed, or stardist")
+            if value not in ["watershed", "local_watershed", "stardist", "cellpose"]:
+                raise ValueError("nuclei.method must be watershed, local_watershed, stardist, or cellpose")
         elif key in ["min_dapi_contrast", "stardist_probability_threshold"]:
             if value is not None:
                 number(value, f"nuclei.{key}")
                 if key == "stardist_probability_threshold" and value >= 1:
                     raise ValueError("stardist_probability_threshold must be between 0 and 1")
+        elif key == "cellpose_threads":
+            number(value, "nuclei.cellpose_threads", integer=True)
         elif key == "stardist_model":
             if not isinstance(value, str) or not value:
                 raise ValueError("stardist_model must name a registered StarDist model")
@@ -288,7 +292,9 @@ def package_version(distribution, module=None):
 def describe_profile(config):
     n = config["nuclei"]
     method = n["method"]
-    if method == "watershed":
+    if method == "cellpose":
+        method += "/nuclei/raw-DAPI"
+    elif method == "watershed":
         method += "/" + n["threshold_method"]
     elif method == "stardist" and n["stardist_clahe"]:
         method += "/CLAHE"
@@ -306,6 +312,76 @@ def preflight(config):
             load_stardist_model(config["nuclei"]["stardist_model"])
         except Exception as exc:
             raise RuntimeError(f"StarDist initialization failed before analysis: {exc}") from exc
+
+    if config["nuclei"]["method"] == "cellpose":
+        try:
+            load_cellpose_model(config["nuclei"]["cellpose_threads"])
+        except Exception as exc:
+            raise RuntimeError(f"Cellpose initialization failed before analysis: {exc}") from exc
+
+
+from cellpose_backend import CELLPOSE_WEIGHTS_SHA256
+_CELLPOSE_MODELS = {}
+
+
+class CellposeWorker:
+    """Cross the incompatible NumPy boundary with numeric NPY files, never pickle."""
+    def __init__(self, python, threads):
+        self.python, self.threads = python, threads
+
+    def run(self, image=None, diameter=None):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="rnascope-cellpose-") as directory:
+            folder = Path(directory)
+            command = [self.python, str(Path(__file__).with_name("cellpose_backend.py")),
+                       "--threads", str(self.threads), "--metadata", str(folder / "metadata.json")]
+            if image is not None:
+                np.save(folder / "input.npy", image, allow_pickle=False)
+                command += ["--input", str(folder / "input.npy"), "--output", str(folder / "labels.npy"),
+                            "--diameter", str(diameter)]
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=600)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise RuntimeError(f"Cannot run isolated Cellpose worker: {exc}") from exc
+            if result.returncode:
+                raise RuntimeError(f"Isolated Cellpose worker failed: {result.stderr[-4000:]}")
+            info = json.loads((folder / "metadata.json").read_text())
+            labels = np.load(folder / "labels.npy", allow_pickle=False) if image is not None else None
+            if labels is not None and (labels.shape != image.shape or labels.dtype != np.int32 or np.any(labels < 0)):
+                raise RuntimeError("Invalid Cellpose worker labels")
+            return labels, info
+
+    def eval(self, image, **kwargs):
+        labels, _ = self.run(image, kwargs["diameter"])
+        return labels, None, None
+
+
+def load_cellpose_model(threads):
+    python = os.environ.get("CELLPOSE_PYTHON", str(Path(__file__).resolve().parent / ".venv-cellpose" / "bin" / "python"))
+    key = (python, threads, os.environ.get("CELLPOSE_LOCAL_MODELS_PATH"))
+    if key not in _CELLPOSE_MODELS:
+        worker = CellposeWorker(python, threads)
+        _, info = worker.run()
+        _CELLPOSE_MODELS[key] = worker, info
+    return _CELLPOSE_MODELS[key]
+
+
+def cellpose_labels(image, spacing, config):
+    # Avoid silently using a pixel diameter on anisotropic acquisitions.
+    if not np.isclose(spacing[0], spacing[1], rtol=.01):
+        raise ValueError("Cellpose currently requires square XY pixels (within 1%); resampling is not validated")
+    model, info = load_cellpose_model(config["cellpose_threads"])
+    diameter = config["cellpose_diameter_um"] / float(np.mean(spacing))
+    labels, _, _ = model.eval(image, channels=[0, 0], channel_axis=None,
+                             diameter=diameter, normalize={"percentile": [1., 99.]},
+                             flow_threshold=.4, cellprob_threshold=0., min_size=15,
+                             resample=True, augment=False, do_3D=False)
+    return labels.astype(np.int32), {"method": "cellpose", **info,
+            "input": "raw DAPI only", "diameter_um": config["cellpose_diameter_um"],
+            "diameter_px": diameter, "normalization_percentiles": [1., 99.],
+            "flow_threshold": .4, "cellprob_threshold": 0., "min_size_px": 15,
+            "resample": True, "augment": False, "do_3D": False}
 
 
 def load_stardist_model(name):
@@ -373,8 +449,8 @@ def segment_nuclei(image: np.ndarray, spacing, config: dict):
     if config["method"] != "watershed":
         if not np.ptp(image):
             return np.zeros(image.shape, np.int32), [], {"method": config["method"], "flat_dapi": True}
-        labels, info = (stardist_labels(image, spacing, config) if config["method"] == "stardist" else
-                        local_watershed_labels(image, spacing, config))
+        labels, info = {"stardist": stardist_labels, "cellpose": cellpose_labels,
+                        "local_watershed": local_watershed_labels}[config["method"]](image, spacing, config)
         return labels, nucleus_records(labels, spacing, config, image), info
     f = image.astype(np.float32)
     smooth = ndi.gaussian_filter(f, [config["smooth_sigma_um"] / p for p in spacing])
@@ -466,7 +542,7 @@ def nucleus_records(labels, spacing, config, image=None):
 def robust_noise(a: np.ndarray) -> tuple[float, float]:
     median = float(np.median(a))
     noise = float(1.4826 * np.median(np.abs(a - median)))
-    return median, max(noise, np.finfo(np.float32).eps)
+    return median, float(max(noise, np.finfo(np.float32).eps))
 
 
 def saturation_level(image, configured, component_bit_count=None):
@@ -1037,12 +1113,12 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, help="New or empty results folder")
     parser.add_argument("--config", type=Path, help="Required for analysis: choose an explicit JSON profile")
     parser.add_argument("--recursive", action="store_true", help="Include CZI files in subfolders")
-    parser.add_argument("--write-default-config", type=Path, metavar="PATH", help="Copy the shipped StarDist + 2 um profile and exit")
+    parser.add_argument("--write-default-config", type=Path, metavar="PATH", help="Copy the main Cellpose nuclei + 2 um profile and exit")
     parser.add_argument("--version", action="version", version=VERSION)
     args = parser.parse_args(argv)
     if args.write_default_config:
         try:
-            config = load_profile(Path(__file__).with_name("settings.json"))
+            config = load_profile(Path(__file__).with_name("settings_cellpose.json"))
             with args.write_default_config.open("x", encoding="utf-8") as f:
                 json.dump(config, f, indent=2); f.write("\n")
         except (ValueError, OSError) as exc:
@@ -1051,8 +1127,8 @@ def main(argv=None):
     if args.input is None or args.output is None:
         parser.error("--input and --output are required")
     if args.config is None:
-        parser.error("--config is required: use settings_nucleus_only.json for nuclear overlap "
-                     "or settings.json for nuclei plus 2 um; no method is selected silently")
+        parser.error("--config is required: use settings_cellpose.json for Cellpose nuclei plus 2 um "
+                     "or settings_nucleus_only.json for historical StarDist nuclear overlap; no method is selected silently")
     try:
         config = load_profile(args.config)
         return run_batch(args.input, args.output, config, args.recursive)

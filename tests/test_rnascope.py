@@ -61,7 +61,7 @@ class ConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profile.json"
             self.assertEqual(rn.main(["--write-default-config", str(path)]), 0)
-            self.assertEqual(rn.load_profile(path), rn.load_profile(Path(rn.__file__).with_name("settings.json")))
+            self.assertEqual(rn.load_profile(path), rn.load_profile(Path(rn.__file__).with_name("settings_cellpose.json")))
 
     def test_partial_settings_and_typos(self):
         config = rn.merge_config({"spots": {"pnoc": {"positive_min_spots": 4}}})

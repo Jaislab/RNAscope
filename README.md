@@ -17,27 +17,59 @@ to individual cells requires additional boundary information. See the
 
 ## Install and run
 
-Tested on Linux CPU with Python 3.12; a GPU is not required. The pinned
-TensorFlow 2.21 environment is not an Intel-Mac installation target: that
-release has no Intel-macOS wheel. Windows and Apple-silicon macOS are not
-validated platforms for this repository yet.
+The main analysis platform is **Cellpose nuclei +2 µm**, using the pinned
+legacy Cellpose 3.1.1.3 `nuclei` model on raw DAPI. Linux CPU / Python 3.12 is
+the supported setup. RNA channels do not guide segmentation. Both genes keep
+the ≥3-peak threshold. The counting region is a non-overlapping 2 µm expansion
+of accepted nuclei; rejected nuclear pixels are blocked. Nuclear-only counts
+are also retained. This is nucleus-associated signal, not a validated whole-cell
+boundary or a nuclear-overlap measurement.
+
+Cellpose requires NumPy <2.1; the current CZI reader requires NumPy ≥2.1.
+Use two environments: the batch runner exchanges numeric NPY arrays with an
+isolated Cellpose subprocess. Do not install both dependency sets together.
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements-stardist.txt
-python rnascope.py --input /path/to/czi_folder --output results_nuclear --config settings_nucleus_only.json
+.venv/bin/python -m pip install -r requirements-lock.txt
+python3 -m venv .venv-cellpose
+.venv-cellpose/bin/python -m pip install -r requirements-cellpose.txt
+.venv/bin/python rnascope.py --input /path/to/czi_folder --output results_cellpose_main --config settings_cellpose.json
 ```
 
-First model use downloads official StarDist weights with the registered archive
-checksum and normal TLS verification. Output folders must be new or empty.
-Add `--recursive` to include subfolders. Input CZIs are read-only.
+The worker defaults to `.venv-cellpose/bin/python` beside `rnascope.py`.
+Set `CELLPOSE_PYTHON` to an absolute Python path for another environment location.
+`CELLPOSE_LOCAL_MODELS_PATH` optionally chooses the weight cache; otherwise it
+uses `.cache/cellpose` beside the scripts. The official weight download uses
+verified HTTPS and must match the reference SHA-256 recorded in
+[the comparison report](docs/CELLPOSE_COMPARISON.md). That fingerprint is a
+reproducibility check, not an independently published publisher checksum.
+Missing dependencies, weights or worker failures abort without method fallback.
 
-**`--config` is required.** No analysis method is selected silently. The active
-segmentation, detectors and expansion radius are printed at startup and saved
-as `analysis_profile` in scene/batch summaries and the run manifest.
+Use a new/empty output folder. Add `--recursive` for subfolders. Input CZIs are
+read-only. Only single optical sections and square XY sampling (within 1%) are
+supported for Cellpose; anisotropic acquisitions fail explicitly. The nominal
+nuclear diameter is 11.74 µm, converted using image calibration (about 17 pixels
+at the reference sampling). It can be set with `nuclei.cellpose_diameter_um`;
+`nuclei.cellpose_threads` controls CPU parallelism. These are starting settings,
+not validated universal parameters.
 
-## Primary endpoint and biological limits
+**`--config` remains required.** Use `settings_cellpose.json` for the main
+workflow. `--write-default-config my_settings.json` now copies that profile.
+Scene metadata records the model, weight fingerprint, package versions, diameter,
+normalization and inference parameters. The active method and expansion are
+printed and recorded in summaries and run manifests.
+
+The historical StarDist profiles remain available unchanged: `settings.json`
+(+2 µm) and `settings_nucleus_only.json` (no expansion). To run those methods,
+install `requirements-stardist.txt` in a separate StarDist environment.
+The results below describe historical reference runs, not a new Cellpose
+biological validation. Existing reference comparisons show substantially fewer
+objects with the legacy Cellpose nuclei model; higher coexpression percentages
+do not establish better accuracy. Expert review on representative images remains
+necessary before interpreting scientific results.
+
+## Endpoint and biological limits
 
 With the nucleus-only profile, a nucleus is Cre-positive with **≥3 detected Cy5
 peaks** and Pnoc-positive with **≥3 detected ATTO 520 peaks** inside that nucleus.
@@ -62,11 +94,11 @@ The Cre-conditioned fraction describes **detected RNA coexpression**. It can
 inform Cre-driver characterization, but does not directly measure functional
 recombination, reporter specificity, or the efficiency of labeling all Pnoc cells.
 
-## Nuclear overlap versus a surrounding region
+## Historical profiles: nuclear overlap versus a surrounding region
 
 | Profile | Counting region | Interpretation |
 |---|---|---|
-| `settings_nucleus_only.json` | DAPI nuclear mask | Primary nuclear-overlap measurement |
+| `settings_nucleus_only.json` | DAPI nuclear mask | Historical nuclear-overlap measurement |
 | `settings.json` | Nucleus plus a non-overlapping 2 µm region | Additional nucleus-associated cytoplasmic signal; cell ownership is approximate |
 | `settings_legacy.json` | Nuclear mask with earlier watershed/LoG methods | Historical method comparison |
 
@@ -82,11 +114,8 @@ must not be labeled nuclear overlap. Nuclear-only counts remain in the expanded
 run's cell table for comparison. The profiles and ≥3 criteria are unchanged
 from v0.2.0; this documentation distinguishes their biological interpretations.
 
-`--write-default-config my_settings.json` copies the shipped **StarDist + 2 µm**
-profile, equivalent to `settings.json`; it does not write the legacy pipeline.
-For the primary nuclear endpoint, use `settings_nucleus_only.json` explicitly.
 
-## Example results
+## Historical reference results
 
 The reference single-section `20X_L_CZI.czi` produced:
 
@@ -148,7 +177,7 @@ Zero denominators are `NA` in CSV and `null` in JSON. Batch percentages use
 summed counts. Images/nuclei are not automatically independent biological
 replicates; group results by animal/sample using the experimental design.
 
-## Optional Cellpose second opinion
+## Historical Cellpose comparison
 
 The [Cellpose comparison](docs/CELLPOSE_COMPARISON.md) runs the legacy `nuclei`
 and `cyto3` models on the same image, preserving ≥3 puncta and frozen detections.
@@ -158,7 +187,7 @@ separate environment; install/run instructions are in the report.
 
 On the reference image, Pnoc-guided cell estimates link only 20 of the original
 121 Cre-positive objects. These outlines are not validated whole-cell boundaries
-and do not replace the current 2 µm profile. Expert annotations are still needed
+and are not used by the main Cellpose nuclei +2 µm profile. Expert annotations are still needed
 for an accuracy comparison.
 
 ## Verification and audit
@@ -179,7 +208,7 @@ not an accuracy optimum or a change to the production profile.
 python -m unittest discover -s tests -v
 ```
 
-The 40 tests cover software behavior, all shipped profiles, missing version
+The tests cover software behavior, all shipped profiles, missing version
 metadata, explicit profile selection, priority/informational QC separation,
 Cre-endpoint triage, bit-depth saturation, lossless ImageJ masks and production-profile exports with
 mocked nucleus inference. Actual StarDist inference was also executed on
@@ -191,3 +220,15 @@ physical reassignment, excluded-mask blocking, baseline reproduction and
 weighted multi-scene totals.
 Cellpose-comparison tests cover channel ordering, unique instance matching,
 ambiguous cell links and separation of blinded reviewer files from the model key.
+
+For the main platform, run the suite in the analysis environment, then exercise
+actual Cellpose inference and full scene exports on synthetic data:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python tests/smoke_cellpose.py
+```
+
+The smoke check downloads verified weights if needed and checks four synthetic
+nuclei, RNA classifications, 2 µm expansion, and CSV/TIFF/PDF exports. It does
+not validate real-image segmentation accuracy or CZI end-to-end decoding.

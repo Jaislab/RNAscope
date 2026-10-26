@@ -1,3 +1,11 @@
+## 0.3.0 — Main Cellpose nuclei +2 µm workflow
+
+- Add explicit `settings_cellpose.json` and direct batch routing to legacy Cellpose nuclei on raw DAPI, with the existing ≥3-peak cutoffs, physical 2 µm assignment, QC and exports.
+- Isolate inference in a pinned subprocess because the CZI reader and Cellpose have incompatible NumPy requirements; verify weights before loading and record model provenance. No fallback to another method.
+- Make exported default configurations use the Cellpose profile; historical shipped profiles remain unchanged.
+- Add routing, calibration, failure and export regression tests plus an actual-inference synthetic smoke check. Real-image accuracy remains unvalidated.
+- Ensure a zero-noise detector estimate remains JSON serializable.
+
 # Changelog
 
 ## Unreleased: optional comparison tools
