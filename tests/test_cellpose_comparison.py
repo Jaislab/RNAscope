@@ -1,5 +1,6 @@
 """Known-mask checks for the optional Cellpose second-opinion workflow."""
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -7,9 +8,37 @@ import numpy as np
 
 import cellpose_infer as inference
 import compare_cellpose as comparison
+import prepare_cellpose_input as preparation
+import rnascope as rn
 
 
 class CellposeComparisonTests(unittest.TestCase):
+    def test_analysis_root_is_found_for_nested_recursive_scene_layouts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "results_expanded"
+            scene = root / "images" / "animal_1" / "section_a.czi" / "scene_0"
+            scene.mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "run_manifest.json"):
+                rn.analysis_root(scene)
+            (root / "run_manifest.json").write_text("{}")
+            (root / "config_used.json").write_text("{}")
+            self.assertEqual(rn.analysis_root(scene), root.resolve())
+            self.assertEqual(rn.analysis_root(root / "images" / "flat.czi" / "scene_3"), root.resolve())
+
+    def test_preprocessing_control_runs_without_csbdeep(self):
+        self.assertNotIn("csbdeep", sys.modules.get("prepare_cellpose_input").__dict__)
+        rng = np.random.default_rng(3)
+        dapi = (200 + 4000 * rng.random((48, 48))).astype(np.uint16)
+        config = rn.load_profile(Path(rn.__file__).with_name("settings.json"))["nuclei"]
+        processed = preparation.reference_dapi_preprocessing(dapi, [.69, .69], config)
+        self.assertEqual(processed.dtype, np.float32)
+        self.assertEqual(processed.shape, dapi.shape)
+        self.assertTrue(0 <= processed.min() and processed.max() <= 1)
+        # Same formula as csbdeep.utils.normalize: (x - p1) / (p99.8 - p1 + 1e-20), float32.
+        x = np.array([[0., 10.], [20., 1000.]], np.float32)
+        low, high = np.float32(np.percentile(x, 1)), np.float32(np.percentile(x, 99.8))
+        np.testing.assert_array_equal(rn.percentile_normalize(x, 1, 99.8), (x - low) / (high - low + np.float32(1e-20)))
+
     def test_filtered_assignment_mask_can_omit_high_rejected_ids(self):
         labels = np.array([[0, 2, 2]], np.uint32)
         records = [{"nucleus_id": 2, "accepted": True}, {"nucleus_id": 7, "accepted": False}]

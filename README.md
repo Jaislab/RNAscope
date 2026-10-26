@@ -58,18 +58,32 @@ not validated universal parameters.
 
 **`--config` remains required.** Use `settings_cellpose.json` for the main
 workflow. `--write-default-config my_settings.json` now copies that profile.
-Scene metadata records the model, weight fingerprint, package versions, diameter,
-normalization and inference parameters. The active method and expansion are
-printed and recorded in summaries and run manifests.
+The fixed inference settings (normalization, flow and cell-probability
+thresholds, minimum mask size) are defined once in `cellpose_backend.py`. The
+batch runner sends the full keyword set to the worker, the worker echoes exactly
+what it ran, and masks whose echo differs from the request are refused, so scene
+metadata records the model, weight fingerprint, package versions, diameter and
+the inference parameters that produced the masks. Run manifests record the
+hashes of both scripts. The active method and expansion are printed and
+recorded in summaries and run manifests.
 
 The historical StarDist profiles remain available unchanged: `settings.json`
 (+2 µm) and `settings_nucleus_only.json` (no expansion). To run those methods,
 install `requirements-stardist.txt` in a separate StarDist environment.
 The results below describe historical reference runs, not a new Cellpose
-biological validation. Existing reference comparisons show substantially fewer
-objects with the legacy Cellpose nuclei model; higher coexpression percentages
-do not establish better accuracy. Expert review on representative images remains
-necessary before interpreting scientific results.
+biological validation.
+
+**The main profile's object count is unvalidated against expert labels.** On
+the reference image it accepts 409 nuclei where the StarDist profile accepts
+1,554; only 124 of those StarDist nuclei match a Cellpose object at IoU ≥ 0.5,
+and 285 of the 409 Cellpose objects match no StarDist nucleus. Its 94.74%
+coexpression value rests on 38 Cre-positive objects. No expert annotation has
+established which segmentation is closer to the true nuclei, and the
+[blinded review package](docs/CELLPOSE_COMPARISON.md#blinded-review-package)
+has not been scored. A higher coexpression percentage does not establish better
+accuracy. Treat the main profile's counts and percentages as provisional, and
+complete expert review on representative images before interpreting scientific
+results.
 
 ## Endpoint and biological limits
 
@@ -185,7 +199,10 @@ The [Cellpose comparison](docs/CELLPOSE_COMPARISON.md) runs the legacy `nuclei`
 and `cyto3` models on the same image, preserving ≥3 puncta and frozen detections.
 It includes DAPI preprocessing controls, Pnoc/DAPI cell-outline estimates,
 per-object disagreements and a blinded annotation template. Cellpose uses a
-separate environment; install/run instructions are in the report.
+separate environment; install/run instructions are in the report. The export
+and comparison steps run in the main analysis environment, accept scene folders
+from `--recursive` runs, and reproduce the StarDist preprocessing control without
+the StarDist dependencies.
 
 On the reference image, Pnoc-guided cell estimates link only 20 of the original
 121 Cre-positive objects. These outlines are not validated whole-cell boundaries

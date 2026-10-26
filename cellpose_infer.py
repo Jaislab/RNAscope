@@ -19,6 +19,8 @@ import time
 import numpy as np
 import tifffile
 
+from cellpose_backend import CELLPOSE_INFERENCE
+
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -86,12 +88,11 @@ def run_inference(input_path, metadata_path, output, nuclear_diameter=17.0, cell
             cache[model_name] = (models.CellposeModel(gpu=False, model_type=model_name), weight_path)
         model, weights = cache[model_name]
         x, channel_spec, channel_axis = model_input(image, metadata["channel_indices"], variant, processed_dapi)
+        # Same fixed keyword set as the main workflow's worker; only input layout and diameter vary.
+        parameters = {**CELLPOSE_INFERENCE, "channels": channel_spec, "channel_axis": channel_axis, "diameter": diameter}
         started = time.monotonic()
         print(f"Running {variant}: {model_name}, diameter {diameter:g} px, channels {channel_spec}", flush=True)
-        masks, _, _ = model.eval(x, channels=channel_spec, channel_axis=channel_axis,
-                                 diameter=diameter, normalize={"percentile": [1., 99.]},
-                                 flow_threshold=.4, cellprob_threshold=0., min_size=15,
-                                 resample=True, augment=False, do_3D=False)
+        masks, _, _ = model.eval(x, **parameters)
         spacing = metadata["pixel_size_yx_um"]
         path = output / f"{variant}_labels.tif"
         tifffile.imwrite(path, masks.astype(np.uint32), photometric="minisblack",
@@ -100,7 +101,7 @@ def run_inference(input_path, metadata_path, output, nuclear_diameter=17.0, cell
         manifest["profiles"][variant] = {"model": model_name, "diameter_px": diameter,
                                         "channels": channel_spec, "channel_axis": channel_axis,
                                         "reference_dapi_preprocessing": variant.endswith("_clahe"),
-                                        "flow_threshold": .4, "cellprob_threshold": 0., "min_size_px": 15,
+                                        "inference": parameters,
                                         "candidates": int(np.unique(masks[masks > 0]).size),
                                         "elapsed_seconds": time.monotonic() - started,
                                         "weights_file": weights.name, "weights_sha256": sha256(weights),

@@ -1,3 +1,20 @@
+## Audit round four: inference provenance and comparison tooling
+
+- Define the fixed Cellpose `model.eval` keyword set once in `cellpose_backend.py`.
+  The batch runner sends the complete set to the isolated worker as JSON, the
+  worker applies exactly that set and echoes it, and the runner refuses masks
+  whose echo differs. Scene metadata now records the echoed parameters instead
+  of a second hard-coded copy; `cellpose_infer.py` uses the same constant.
+- Report the digest of the weight file the worker actually loaded and verify it
+  against the reference fingerprint on every worker call; record the worker
+  script hash in run manifests and scene metadata.
+- Reproduce the csbdeep percentile normalization in NumPy so
+  `prepare_cellpose_input.py` runs in the main analysis environment, as documented.
+- Locate the analysis run root by walking up from a scene folder, so the
+  comparison tools accept scenes exported by `--recursive` runs with subfolders.
+- State in the README that the main profile's object count is unvalidated
+  against expert labels. No segmentation, detection or counting behavior changed.
+
 ## Exact-17-pixel reproducibility fix
 
 - Replace `nuclei.cellpose_diameter_um` with `nuclei.cellpose_diameter_px`, default 17.0. Pass the pixel value directly to inference; retain physical diameter as derived metadata. Existing custom profiles using the old key must migrate explicitly.

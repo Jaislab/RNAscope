@@ -37,6 +37,8 @@ def main():
         assert info['segmentation']['weights_sha256'] == rn.CELLPOSE_WEIGHTS_SHA256
         assert info['segmentation']['packages']['cellpose'] == '3.1.1.3'
         assert info['segmentation']['diameter_px'] == 17.0
+        assert info['segmentation']['inference'] == rn.cellpose_inference_parameters(config['nuclei'])
+        assert info['segmentation']['backend_sha256'] == rn.sha256(rn.CELLPOSE_BACKEND)
         nuclei = rn.tifffile.imread(out / 'nuclei_labels.tif')
         expanded = rn.tifffile.imread(out / 'assignment_labels.tif')
         assert np.count_nonzero(expanded) > np.count_nonzero(nuclei)

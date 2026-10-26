@@ -19,7 +19,9 @@ import json
 import logging
 import math
 import os
+import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -29,6 +31,8 @@ from scipy import ndimage as ndi
 from skimage import exposure, filters, measure, morphology, segmentation
 from skimage.feature import peak_local_max
 import tifffile
+
+from cellpose_backend import CELLPOSE_INFERENCE, CELLPOSE_WEIGHTS_SHA256
 
 VERSION = "0.3.0"
 DEFAULT_CONFIG = {
@@ -265,6 +269,31 @@ def as_cyx(array: np.ndarray, dims) -> np.ndarray:
     return np.transpose(array, [dims.index(k) for k in "CYX"])
 
 
+def percentile_normalize(image, pmin, pmax, eps=1e-20):
+    """Reproduce csbdeep.utils.normalize's NumPy path in float32 without importing csbdeep.
+
+    Percentiles are taken on the original array (float64 for integer input, as
+    csbdeep does) and only then cast, so results are bit-identical to csbdeep.
+    """
+    image = np.asarray(image)
+    low, high = (np.float32(np.percentile(image, p)) for p in (pmin, pmax))
+    x = image.astype(np.float32, copy=False)
+    return (x - low) / (high - low + np.float32(eps))
+
+
+def analysis_root(scene):
+    """Locate the batch output folder above a scene export without assuming a fixed depth.
+
+    Scenes from ``--recursive`` runs sit at images/<sub>/<file>.czi/scene_<id>, so
+    walk upwards until the run manifest and saved configuration are found together.
+    """
+    scene = Path(scene).resolve()
+    for candidate in [scene, *scene.parents]:
+        if (candidate / "run_manifest.json").is_file() and (candidate / "config_used.json").is_file():
+            return candidate
+    raise ValueError(f"No analysis run (run_manifest.json + config_used.json) found above {scene}")
+
+
 def physical_footprint(radius_um: float, spacing) -> np.ndarray:
     ry, rx = [max(1, math.ceil(radius_um / p)) for p in spacing]
     y, x = np.mgrid[-ry:ry + 1, -rx:rx + 1]
@@ -320,41 +349,49 @@ def preflight(config):
             raise RuntimeError(f"Cellpose initialization failed before analysis: {exc}") from exc
 
 
-from cellpose_backend import CELLPOSE_WEIGHTS_SHA256
 _CELLPOSE_MODELS = {}
+CELLPOSE_BACKEND = Path(__file__).with_name("cellpose_backend.py")
 
 
 class CellposeWorker:
-    """Cross the incompatible NumPy boundary with numeric NPY files, never pickle."""
+    """Cross the incompatible NumPy boundary with numeric NPY files, never pickle.
+
+    Every model.eval keyword argument travels to the worker as JSON; the worker
+    echoes what it ran and this side refuses labels whose echo differs.
+    """
     def __init__(self, python, threads):
         self.python, self.threads = python, threads
 
-    def run(self, image=None, diameter=None):
-        import subprocess
-        import tempfile
+    def run(self, image=None, parameters=None):
         with tempfile.TemporaryDirectory(prefix="rnascope-cellpose-") as directory:
             folder = Path(directory)
-            command = [self.python, str(Path(__file__).with_name("cellpose_backend.py")),
+            command = [self.python, str(CELLPOSE_BACKEND),
                        "--threads", str(self.threads), "--metadata", str(folder / "metadata.json")]
             if image is not None:
+                if not isinstance(parameters, dict):
+                    raise ValueError("Cellpose inference requires an explicit parameter dictionary")
                 np.save(folder / "input.npy", image, allow_pickle=False)
+                write_json(folder / "parameters.json", parameters)
                 command += ["--input", str(folder / "input.npy"), "--output", str(folder / "labels.npy"),
-                            "--diameter", str(diameter)]
+                            "--parameters", str(folder / "parameters.json")]
             try:
                 result = subprocess.run(command, capture_output=True, text=True, timeout=600)
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise RuntimeError(f"Cannot run isolated Cellpose worker: {exc}") from exc
             if result.returncode:
                 raise RuntimeError(f"Isolated Cellpose worker failed: {result.stderr[-4000:]}")
-            info = json.loads((folder / "metadata.json").read_text())
-            labels = np.load(folder / "labels.npy", allow_pickle=False) if image is not None else None
-            if labels is not None and (labels.shape != image.shape or labels.dtype != np.int32 or np.any(labels < 0)):
+            info = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+            if info.get("weights_sha256") != CELLPOSE_WEIGHTS_SHA256:
+                raise RuntimeError("Isolated Cellpose worker reported an unexpected weight fingerprint; refusing its output")
+            if image is None:
+                return None, info
+            labels = np.load(folder / "labels.npy", allow_pickle=False)
+            if labels.shape != image.shape or labels.dtype != np.int32 or np.any(labels < 0):
                 raise RuntimeError("Invalid Cellpose worker labels")
+            if info.get("inference") != parameters:
+                raise RuntimeError("Isolated Cellpose worker did not echo the requested inference parameters; "
+                                   "recorded provenance would not describe the masks")
             return labels, info
-
-    def eval(self, image, **kwargs):
-        labels, _ = self.run(image, kwargs["diameter"])
-        return labels, None, None
 
 
 def load_cellpose_model(threads):
@@ -367,21 +404,22 @@ def load_cellpose_model(threads):
     return _CELLPOSE_MODELS[key]
 
 
+def cellpose_inference_parameters(config):
+    """The complete model.eval keyword set for this profile: exact pixel diameter plus shared constants."""
+    return {"diameter": float(config["cellpose_diameter_px"]), **copy.deepcopy(CELLPOSE_INFERENCE)}
+
+
 def cellpose_labels(image, spacing, config):
     # Avoid silently using a pixel diameter on anisotropic acquisitions.
     if not np.isclose(spacing[0], spacing[1], rtol=.01):
         raise ValueError("Cellpose currently requires square XY pixels (within 1%); resampling is not validated")
-    model, info = load_cellpose_model(config["cellpose_threads"])
-    diameter = config["cellpose_diameter_px"]
-    labels, _, _ = model.eval(image, channels=[0, 0], channel_axis=None,
-                             diameter=diameter, normalize={"percentile": [1., 99.]},
-                             flow_threshold=.4, cellprob_threshold=0., min_size=15,
-                             resample=True, augment=False, do_3D=False)
-    return labels.astype(np.int32), {"method": "cellpose", **info,
-            "input": "raw DAPI only", "diameter_um": diameter * float(np.mean(spacing)),
-            "diameter_px": diameter, "normalization_percentiles": [1., 99.],
-            "flow_threshold": .4, "cellprob_threshold": 0., "min_size_px": 15,
-            "resample": True, "augment": False, "do_3D": False}
+    worker, _ = load_cellpose_model(config["cellpose_threads"])
+    labels, info = worker.run(image, cellpose_inference_parameters(config))
+    # Record the echoed parameter set, not a second copy of the request.
+    used = info["inference"]
+    return labels.astype(np.int32), {"method": "cellpose", **info, "input": "raw DAPI only",
+                                     "diameter_px": used["diameter"],
+                                     "diameter_um": used["diameter"] * float(np.mean(spacing))}
 
 
 def load_stardist_model(name):
@@ -1090,6 +1128,7 @@ def run_batch(input_dir, output_dir, config, recursive=False):
         write_csv(output_dir / "batch_summary.csv", [total], [*COUNT_FIELDS, "pct_pnoc_expressing_cre",
                   "pct_cre_expressing_pnoc", "assignment_expand_um", "analysis_profile", "successful_scenes", "failed_items", "complete"])
         write_json(output_dir / "run_manifest.json", {"script_version": VERSION, "script_sha256": sha256(__file__),
+                   "cellpose_backend_sha256": sha256(CELLPOSE_BACKEND),
                    "analysis_profile": profile,
                    "started_at_utc": started_at, "finished_at_utc": datetime.now(timezone.utc).isoformat(),
                    "python_version": sys.version, "packages": packages, "inputs": inputs,

@@ -169,9 +169,10 @@ def run_comparison(reference, input_path, inference, output):
     reference, inference, output = map(Path, (reference, inference, output))
     if output.exists() and any(output.iterdir()):
         raise ValueError("Output folder must be new or empty")
-    config_path = reference.parents[2] / "config_used.json"
+    root = rn.analysis_root(reference)
+    config_path = root / "config_used.json"
     config = json.loads(config_path.read_text())
-    reference_manifest = json.loads((reference.parents[2] / "run_manifest.json").read_text())
+    reference_manifest = json.loads((root / "run_manifest.json").read_text())
     if rn.sha256(config_path) != reference_manifest["config_sha256"] or config["assignment"]["expand_um"] != 2:
         raise ValueError("Use a verified reference run with the current 2 um counting region")
     if any(config["spots"][gene]["positive_min_spots"] != 3 for gene in ("pnoc", "cre")):
