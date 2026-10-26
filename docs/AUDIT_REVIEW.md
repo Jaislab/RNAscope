@@ -51,6 +51,23 @@ All 30 v0.2.3 analysis tests pass, including custom cutoffs and endpoint-tier ex
 Both actual CPU profiles preserve their reference masks, peaks and expression
 counts. The new tiers only change review order and add output columns/files.
 
+## Round four: code audit of the Cellpose main workflow
+
+| Finding | Disposition |
+|---|---|
+| Main profile unvalidated | README states that the Cellpose object count (409 vs 1,554 StarDist nuclei; 124 matched at IoU ≥ 0.5) is unvalidated against expert labels and that the blinded review is unscored. Profile choice remains the owner's decision. |
+| Recorded Cellpose parameters were a second hard-coded copy | One shared keyword set; the worker applies and echoes it, the runner refuses masks whose echo differs, and manifests record the worker script hash and loaded-weight digest. |
+| QC rendering cost scaled with pixel count | 8-bit display copies, Pillow overlay PNG, unresampled PDF raster with vector labels, sliced crops, block-reduced overview panels; 2048² scene rendering 45 s / 2.2 GB → 23 s / 0.2 GB. |
+| Comparison prep required csbdeep | NumPy percentile normalization, bit-identical to csbdeep's NumPy path; runs in the main environment. |
+| Fixed run-root depth in comparison tools | Walk up to the run manifest; recursive layouts work. |
+| Fixed worker timeout, stale partial downloads, thread variables set too late | `nuclei.cellpose_timeout_s`; partial files removed on start; limits passed in the child's environment. |
+| DAPI saturation flag used the counting region | Evaluated inside the nuclear mask; RNA masks unchanged. |
+| Contrast filter reused a StarDist-named scale | `nuclei.contrast_smooth_um`, with fallback for older saved configurations. |
+| LoG scale reported from the raw-response maximum | Reported from the detecting (max-SNR) scale. |
+| Validation and messaging gaps | Diameter bounds; scaling metadata guard. |
+| Documentation drift, no CI | Wording refreshed; GitHub Actions unit workflow added. License remains the owner's choice. |
+| No successful-batch test | Batch through the reader interface with nested inputs, followed by a sweep of its exports. |
+
 ## Remaining work and project decisions
 
 - CI across operating systems and a distributable regression dataset remain

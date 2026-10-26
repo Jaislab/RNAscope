@@ -1,4 +1,29 @@
-## Audit round four: QC rendering cost
+# Changelog
+
+## Unreleased
+
+### Audit round four: parameter, flag and tooling fixes
+
+- Make the Cellpose worker timeout a profile setting (`nuclei.cellpose_timeout_s`),
+  pass thread limits to the worker's environment before it starts, and remove
+  partial weight downloads left by a killed worker on the next start.
+- Evaluate DAPI review masks inside the nuclear mask rather than the expanded
+  counting region; RNA masks still use the counting region.
+- Add the method-neutral `nuclei.contrast_smooth_um` (1.4 µm) for the DAPI
+  contrast filter, which previously reused the StarDist preprocessing scale.
+  Shipped profiles set it explicitly; older saved configurations fall back to
+  the scale they were run with.
+- Export `detection_sigma_um`, the LoG scale whose SNR triggered each peak,
+  alongside the unchanged `sigma_um`/`response` size estimate, so the two
+  scales are no longer conflated; detections and existing columns are unchanged.
+- Reject `cellpose_diameter_px` outside 3–500 pixels; treat CZI scaling entries
+  without a usable value as missing calibration instead of failing with a
+  TypeError.
+- Add a GitHub Actions workflow running the unit suite, a batch test through
+  the reader interface with nested inputs and a sweep of its exports, and
+  refresh wording that still described StarDist as the production method.
+
+### Audit round four: QC rendering cost
 
 - Render QC outputs from 8-bit display copies: the annotated overlay PNG is
   drawn with Pillow at the same render scale as before, the PDF embeds the
@@ -9,7 +34,7 @@
   and 2.2 GB peak to 23 s and 0.2 GB; the full scene from 47 s / 2.4 GB RSS to
   27 s / 0.6 GB. Analysis arrays, counts and the exported file set are unchanged.
 
-## Audit round four: inference provenance and comparison tooling
+### Audit round four: inference provenance and comparison tooling
 
 - Define the fixed Cellpose `model.eval` keyword set once in `cellpose_backend.py`.
   The batch runner sends the complete set to the isolated worker as JSON, the
@@ -26,7 +51,7 @@
 - State in the README that the main profile's object count is unvalidated
   against expert labels. No segmentation, detection or counting behavior changed.
 
-## Exact-17-pixel reproducibility fix
+### Exact-17-pixel reproducibility fix
 
 - Replace `nuclei.cellpose_diameter_um` with `nuclei.cellpose_diameter_px`, default 17.0. Pass the pixel value directly to inference; retain physical diameter as derived metadata. Existing custom profiles using the old key must migrate explicitly.
 - Remove the rounded 11.74 µm conversion that triggered a 1024→1023 pixel internal resize at reference sampling.
@@ -40,9 +65,7 @@
 - Add routing, calibration, failure and export regression tests plus an actual-inference synthetic smoke check. Real-image accuracy remains unvalidated.
 - Ensure a zero-noise detector estimate remains JSON serializable.
 
-# Changelog
-
-## Unreleased: optional comparison tools
+## 0.3.0 — Optional comparison tools (added before the main-workflow change)
 
 - Add an isolated, pinned Cellpose 3 workflow for the requested `nuclei` and
   `cyto3` models, with verified source export, model/mask fingerprints and

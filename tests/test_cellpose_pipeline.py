@@ -1,5 +1,7 @@
 """Main-pipeline routing, calibration, provenance and export regression checks."""
+from contextlib import redirect_stderr
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -91,6 +93,52 @@ class CellposePipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'before analysis'):
                 rn.preflight(self.config)
 
+    def test_worker_timeout_and_thread_bounds_come_from_the_profile(self):
+        config = copy.deepcopy(self.config['nuclei']); config.update(cellpose_timeout_s=42.0, cellpose_threads=3)
+        calls = []
+        inner = self.fake_subprocess()
+
+        def recording(command, **kwargs):
+            calls.append(kwargs)
+            return inner(command, **kwargs)
+        environment = {'CELLPOSE_PYTHON': '/timeout/test/python', 'OMP_NUM_THREADS': '7'}
+        with patch.dict(os.environ, environment), patch.object(rn.subprocess, 'run', recording):
+            labels, info = rn.cellpose_labels(np.ones((8, 8), np.uint16), (.5, .5), config)
+        self.assertEqual(labels.shape, (8, 8))
+        self.assertEqual({call['timeout'] for call in calls}, {42.0})
+        env = calls[-1]['env']
+        self.assertEqual(env['OMP_NUM_THREADS'], '7')  # an explicit user setting is respected
+        self.assertEqual((env['OPENBLAS_NUM_THREADS'], env['MKL_NUM_THREADS'], env['NUMBA_NUM_THREADS']), ('3', '3', '3'))
+
+        def expired(command, **kwargs):
+            raise rn.subprocess.TimeoutExpired(command, kwargs['timeout'])
+        with patch.object(rn.subprocess, 'run', expired):
+            with self.assertRaisesRegex(RuntimeError, 'cellpose_timeout_s=42'):
+                rn.CellposeWorker('/unused/python', 2, 42.0).run()
+
+    def test_backend_removes_stale_partial_downloads_before_fetching(self):
+        import sys
+        import urllib.request
+        model_module = Mock()
+        response = Mock(); response.read.side_effect = [b'weights', b'']
+        response.__enter__ = lambda self: self; response.__exit__ = lambda self, *args: False
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(backend.os.environ, {'CELLPOSE_LOCAL_MODELS_PATH': directory}), \
+             patch.object(backend.importlib.metadata, 'version', return_value='3.1.1.3'), \
+             patch.object(backend, 'sha256', return_value=backend.CELLPOSE_WEIGHTS_SHA256), \
+             patch.object(urllib.request, 'urlopen', return_value=response), \
+             patch.dict(sys.modules, {'torch': Mock(), 'cellpose': SimpleNamespace(models=model_module)}):
+            folder = Path(directory)
+            stale = folder / 'nucleitorch_0.partial-killed'; stale.write_bytes(b'half')
+            backend._CELLPOSE_MODELS.clear()
+            _, info = backend.load_cellpose_model(2)
+            self.assertFalse(stale.exists())
+            self.assertEqual((folder / 'nucleitorch_0').read_bytes(), b'weights')
+            self.assertEqual(list(folder.glob('*.partial-*')), [])
+            self.assertEqual(info['weights_sha256'], backend.CELLPOSE_WEIGHTS_SHA256)
+            model_module.CellposeModel.assert_called_once()
+        backend._CELLPOSE_MODELS.clear()
+
     def test_backend_passes_exactly_the_requested_parameters_and_echoes_them(self):
         model = Mock()
         model.eval.return_value = (np.ones((6, 6), np.int64), None, None)
@@ -115,7 +163,7 @@ class CellposePipelineTests(unittest.TestCase):
             for bad in [{**request, 'resize': 1}, {k: v for k, v in request.items() if k != 'min_size'},
                         {**request, 'diameter': 0}]:
                 (folder / 'parameters.json').write_text(json.dumps(bad))
-                with self.assertRaises(SystemExit):
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     backend.main(argv)
             model.eval.assert_not_called()
 
@@ -168,7 +216,8 @@ class CellposePipelineTests(unittest.TestCase):
 
     def test_invalid_parameters(self):
         for key, value in [('cellpose_diameter_px', 0), ('cellpose_threads', 1.5),
-                           ('cellpose_threads', True)]:
+                           ('cellpose_threads', True), ('cellpose_diameter_px', 2), ('cellpose_diameter_px', 1000),
+                           ('cellpose_timeout_s', 0)]:
             config = copy.deepcopy(self.config)
             config['nuclei'][key] = value
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):

@@ -8,9 +8,9 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 from pathlib import Path
-import numpy as np
 
 
 def sha256(path):
@@ -40,7 +40,7 @@ def load_inference_parameters(path):
     if not isinstance(parameters, dict) or set(parameters) != INFERENCE_KEYS:
         raise ValueError(f"Inference parameters must define exactly: {sorted(INFERENCE_KEYS)}")
     diameter = parameters["diameter"]
-    if isinstance(diameter, bool) or not isinstance(diameter, (int, float)) or not np.isfinite(diameter) or diameter <= 0:
+    if isinstance(diameter, bool) or not isinstance(diameter, (int, float)) or not math.isfinite(diameter) or diameter <= 0:
         raise ValueError("diameter must be a positive finite number")
     return parameters
 
@@ -61,10 +61,14 @@ def load_cellpose_model(threads):
         folder.mkdir(parents=True, exist_ok=True)
         weights = folder / "nucleitorch_0"
         if not weights.exists():
+            # The batch runner kills this process on timeout, which skips the cleanup
+            # below, so remove partial downloads from earlier attempts first.
+            for stale in folder.glob(f"{weights.name}.partial-*"):
+                stale.unlink(missing_ok=True)
             # Download atomically; partial or mismatched artifacts are never loaded.
             temporary = None
             try:
-                with tempfile.NamedTemporaryFile(dir=folder, delete=False) as stream:
+                with tempfile.NamedTemporaryFile(dir=folder, prefix=f"{weights.name}.partial-", delete=False) as stream:
                     temporary = Path(stream.name)
                     with urlopen(CELLPOSE_WEIGHTS_URL, timeout=120) as response:
                         while block := response.read(1024 * 1024):
@@ -98,8 +102,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.threads < 1:
         parser.error('threads must be positive')
-    os.environ.setdefault('NUMBA_NUM_THREADS', str(args.threads))
-    os.environ.setdefault('OMP_NUM_THREADS', str(args.threads))
+    # Thread limits (OMP/OpenBLAS/MKL/Numba) arrive in the environment from the
+    # batch runner; setting them here would be too late for NumPy's BLAS pool.
+    import numpy as np
     model, info = load_cellpose_model(args.threads)
     info = {**info, "backend_sha256": sha256(__file__)}
     if args.input is not None:

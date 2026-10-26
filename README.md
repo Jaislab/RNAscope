@@ -52,9 +52,14 @@ supported for Cellpose; anisotropic acquisitions fail explicitly. The nuclear
 diameter is exactly **17 pixels**, passed directly to Cellpose without a rounded
 µm conversion. Set `nuclei.cellpose_diameter_px` to change it explicitly; the
 physical equivalent is recorded in metadata (11.739103190104196 µm on the
-reference image). Different image sampling may require a different pixel diameter;
-`nuclei.cellpose_threads` controls CPU parallelism. These are starting settings,
-not validated universal parameters.
+reference image). Different image sampling may require a different pixel diameter; values
+outside 3–500 pixels are rejected as probable unit mistakes.
+`nuclei.cellpose_threads` controls CPU parallelism; the runner passes it to the
+worker's environment (OMP, OpenBLAS, MKL and Numba limits) unless those variables
+are already set. `nuclei.cellpose_timeout_s` (default 600) bounds one worker
+call, including the first weight download; raise it for large scenes. Partial
+downloads left by a killed worker are removed on the next start. These are
+starting settings, not validated universal parameters.
 
 **`--config` remains required.** Use `settings_cellpose.json` for the main
 workflow. `--write-default-config my_settings.json` now copies that profile.
@@ -178,6 +183,8 @@ percentage enters the algorithm. See [methods](docs/METHODS.md) and
 of either cutoff, or below a gene's cutoff with saturated RNA signal for that
 gene. `review_reasons` explains the conditions; separate `flag_*` columns retain every
 reason, including informational DAPI saturation and irregular mask shape.
+DAPI flags are evaluated inside the nuclear mask; RNA saturation and cluster
+flags inside the counting region.
 Informational flags alone do not add an object to the queue. This is a review
 heuristic, not an error probability or exclusion rule; it does not capture
 every possible segmentation problem. Every Cre-only object still gets a review
@@ -226,7 +233,7 @@ python sweep_parameters.py --results results_expanded --output results_sweep
 The reference [324-setting sensitivity analysis](docs/SENSITIVITY.md) shows why a
 higher percentage can reflect a smaller Cre-positive denominator. Pnoc ≥2 /
 Cre ≥3 at 2 µm gives 114/121 (94.21%); this is a candidate for manual validation,
-not an accuracy optimum or a change to the production profile.
+not an accuracy optimum or a change to any shipped profile.
 
 ```bash
 python -m unittest discover -s tests -v
@@ -234,8 +241,10 @@ python -m unittest discover -s tests -v
 
 The tests cover software behavior, all shipped profiles, missing version
 metadata, explicit profile selection, priority/informational QC separation,
-Cre-endpoint triage, bit-depth saturation, lossless ImageJ masks and production-profile exports with
-mocked nucleus inference. Actual StarDist inference was also executed on
+Cre-endpoint triage, bit-depth saturation, lossless ImageJ masks, shipped-profile exports with
+mocked nucleus inference, and a complete batch through the reader interface with
+nested input folders followed by a sweep of its exports. The same suite runs on
+every push through GitHub Actions (`.github/workflows/tests.yml`, Linux, Python 3.12). Actual StarDist inference was also executed on
 the reference CZI. Passing tests are not a biological sensitivity/specificity
 benchmark. See the [audit response](docs/AUDIT_REVIEW.md) for implemented fixes
 and outstanding recommendations, and the [changelog](CHANGELOG.md).

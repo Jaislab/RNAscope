@@ -19,14 +19,14 @@ peak counts and all baseline summary counts before the sweep proceeds.
 - Total: **324 settings** on one reference section, with the same accepted masks.
 
 The nearest-nucleus, non-overlapping assignment and rejected-mask blocking are
-the same as in production. Increasing radius does not change the DAPI boundary;
+the same as in the shipped profiles. Increasing radius does not change the DAPI boundary;
 it expands the surrounding counting region. Radii are sampled on the native
 pixel grid (0.6905 µm/pixel here), explaining identical 0/0.5 µm results.
 
 The main endpoint always uses the currently selected Cre-positive denominator.
 A second endpoint holds the original **121 Cre-positive objects** at the saved
 2 µm / ≥3 Cre baseline fixed and varies only their Pnoc calls. That comparison
-is exploratory; separate per-gene radii are not a shipped production setting.
+is exploratory; separate per-gene radii are not a shipped setting.
 
 ## Direct comparisons
 
@@ -89,7 +89,8 @@ held-out comparison. Evaluate Pnoc detection within a predefined Cre group and
 also check Cre-group membership. Fix the chosen settings before cohort analysis.
 Approximate aggregate manual counts near 90% do not supply those object labels.
 
-Until that comparison exists, retain the current production profile. The sweep
+Until that comparison exists, keep the profile fixed (StarDist +2 µm was the
+production profile when this sweep was run). The sweep
 provides sensitivity estimates and concrete cases to inspect, rather than a
 setting selected to maximize the expected percentage. One section does not
 establish between-animal reproducibility or biological sensitivity/specificity.

@@ -52,8 +52,9 @@ def run_inference(input_path, metadata_path, output, nuclear_diameter=17.0, cell
     if importlib.metadata.version("cellpose") != "3.1.1.3":
         raise RuntimeError("Use the separate pinned Cellpose 3.1.1.3 environment; newer SAM models are a different comparison")
     os.environ.setdefault("CELLPOSE_LOCAL_MODELS_PATH", str(Path(__file__).resolve().parent / ".cache" / "cellpose"))
+    # Numba reads this at import (below, via cellpose). NumPy's BLAS pool is already
+    # running, so bound OMP/OpenBLAS threads in the shell before launching if needed.
     os.environ.setdefault("NUMBA_NUM_THREADS", str(threads))
-    os.environ.setdefault("OMP_NUM_THREADS", str(threads))
     import torch
     from cellpose import models
     # The legacy /models route returns HTTP 500; the publisher's static route

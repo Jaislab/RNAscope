@@ -1,5 +1,6 @@
 # Optional isolated Linux CPU environment for legacy nuclei/cyto3 models.
-# Do not install into the production StarDist environment.
+# Do not install into the main analysis environment (requirements-lock.txt)
+# or the StarDist environment (requirements-stardist.txt).
 --extra-index-url https://download.pytorch.org/whl/cpu
 cellpose==3.1.1.3
 fastremap==1.21.0

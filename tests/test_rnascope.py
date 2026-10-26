@@ -39,6 +39,17 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(rn.saturation_level(raw, 4000, 12), 4000)
         self.assertEqual(rn.saturation_level(raw, None, 32), 65535)
 
+    def test_scaling_metadata_without_a_usable_value_is_left_unset(self):
+        xml = """<ImageDocument><Metadata><Scaling><Items>
+        <Distance Id="X"><Value></Value></Distance><Distance Id="Y"><Value>5e-07</Value></Distance>
+        </Items></Scaling></Metadata></ImageDocument>"""
+        _, sizes = rn.metadata_from_xml(xml)
+        self.assertEqual(sizes, {"Y": 0.5})
+        _, sizes = rn.metadata_from_xml(xml.replace("<Value></Value>", "<Value>-1</Value>"))
+        self.assertEqual(sizes, {"Y": 0.5})
+        _, sizes = rn.metadata_from_xml(xml.replace("<Value></Value>", "<Value>2.5e-07</Value>"))
+        self.assertEqual(sizes, {"X": 0.25, "Y": 0.5})
+
     def test_no_config_cannot_silently_select_a_method(self):
         error = io.StringIO()
         with patch.object(rn, "run_batch") as run, redirect_stderr(error), self.assertRaises(SystemExit) as exc:
@@ -72,10 +83,10 @@ class ConfigurationTests(unittest.TestCase):
             rn.merge_config({"spots": {"pnoc": {"positve_min_spots": 4}}})
 
     def test_invalid_parameters(self):
-        for patch in [{"pixel_size_um": [0, 1]}, {"spots": {"cre": {"positive_min_spots": 2.5}}},
-                      {"nuclei": {"exclude_border": "false"}}, {"spots": {"pnoc": {"snr_threshold": float("nan")}}}]:
-            with self.subTest(patch=patch), self.assertRaises(ValueError):
-                rn.validate_config(rn.merge_config(patch))
+        for override in [{"pixel_size_um": [0, 1]}, {"spots": {"cre": {"positive_min_spots": 2.5}}},
+                         {"nuclei": {"exclude_border": "false"}}, {"spots": {"pnoc": {"snr_threshold": float("nan")}}}]:
+            with self.subTest(override=override), self.assertRaises(ValueError):
+                rn.validate_config(rn.merge_config(override))
 
     def test_metadata_order_takes_precedence_over_fallback(self):
         metadata = [{"name": n, "fluor": ""} for n in ["DAPI-T4", "At520-T3", "Cy3-T2", "Cy5-T1"]]
@@ -144,6 +155,39 @@ class DetectionTests(unittest.TestCase):
         records = rn.nucleus_records(labels, (0.5, 0.5), config, image)
         self.assertTrue(records[0]["accepted"])
         self.assertIn("low_dapi_contrast", records[1]["exclusion_reason"])
+
+    def test_dapi_contrast_smoothing_is_method_neutral(self):
+        y, x = np.indices((60, 60))
+        labels = np.zeros((60, 60), np.int32); labels[(y - 30) ** 2 + (x - 30) ** 2 < 8 ** 2] = 1
+        image = (100 + 3000 * (labels > 0) + 50 * np.sin(x / 2.0)).astype(np.uint16)
+        config = copy.deepcopy(rn.DEFAULT_CONFIG["nuclei"]); config["min_dapi_contrast"] = 1.0
+        reference = rn.dapi_contrast_ratios(labels, image, (0.5, 0.5), config)[1]
+        decoupled = copy.deepcopy(config); decoupled["stardist_smooth_um"] = 4.0
+        self.assertEqual(rn.dapi_contrast_ratios(labels, image, (0.5, 0.5), decoupled)[1], reference)
+        changed = copy.deepcopy(config); changed["contrast_smooth_um"] = 4.0
+        self.assertNotEqual(rn.dapi_contrast_ratios(labels, image, (0.5, 0.5), changed)[1], reference)
+        # Saved configurations predating the key still reproduce with their StarDist scale.
+        legacy = {k: v for k, v in changed.items() if k != "contrast_smooth_um"}; legacy["stardist_smooth_um"] = 4.0
+        self.assertEqual(rn.dapi_contrast_ratios(labels, image, (0.5, 0.5), legacy)[1],
+                         rn.dapi_contrast_ratios(labels, image, (0.5, 0.5), changed)[1])
+        self.assertEqual(rn.load_profile(Path(rn.__file__).with_name("settings_cellpose.json"))["nuclei"]["contrast_smooth_um"], 1.4)
+
+    def test_log_spots_report_size_scale_and_detection_scale_separately(self):
+        narrow, wide = gaussian_spots((80, 80), [(20, 20)], sigma=1.0), gaussian_spots((80, 80), [(60, 60)], sigma=2.4)
+        image = (narrow.astype(np.int64) + wide - 100).clip(0, 65535).astype(np.uint16)
+        config = rn.DEFAULT_CONFIG["spots"]["pnoc"]
+        spots, info, _ = rn.detect_spots(image, (0.5, 0.5), config)
+        by_position = {(s["y_px"], s["x_px"]): s for s in spots}
+        self.assertIn((20, 20), by_position); self.assertIn((60, 60), by_position)
+        # sigma_um stays the scale-selection size estimate (maximal normalized response).
+        self.assertLess(by_position[(20, 20)]["sigma_um"], by_position[(60, 60)]["sigma_um"])
+        for s in spots:
+            self.assertGreater(s["response"], 0)
+            self.assertGreaterEqual(s["detection_snr"], info["snr_threshold"])
+            self.assertIn(s["detection_sigma_um"], config["sigma_um"])
+        self.assertIn("detection_sigma_um", rn.SPOT_FIELDS)
+        intensity = copy.deepcopy(config); intensity["method"] = "intensity"
+        self.assertIsNone(rn.detect_spots(image, (0.5, 0.5), intensity)[0][0]["detection_sigma_um"])
 
     def test_blank_image_has_no_nuclei_or_spots(self):
         image = np.zeros((64, 64), np.uint16)
@@ -247,6 +291,18 @@ class CountingTests(unittest.TestCase):
         self.assertEqual(nuclei[0]["classification"], "pnoc_only")
         self.assertEqual(spots["pnoc"][1]["nucleus_id"], 0)
         self.assertEqual(spots["pnoc"][1]["assignment_id"], 1)
+
+    def test_dapi_flags_use_the_nucleus_and_rna_flags_use_the_counting_region(self):
+        labels = np.zeros((20, 40), np.int32); labels[5:15, 5:15] = 1
+        nuclei = [{"nucleus_id": 1, "accepted": True}]
+        assignments = rn.build_assignment_labels(labels, nuclei, (0.5, 0.5), 2.0)
+        ring = (assignments == 1) & (labels == 0)
+        self.assertTrue(ring.any())
+        for masks, dapi_flag, pnoc_flag in [({"dapi_saturation": ring, "pnoc_saturation": ring}, False, True),
+                                            ({"dapi_saturation": labels == 1}, True, False)]:
+            cells = copy.deepcopy(nuclei)
+            rn.assign_and_classify(labels, cells, {"pnoc": [], "cre": []}, rn.DEFAULT_CONFIG["spots"], masks, assignments)
+            self.assertEqual((cells[0]["flag_dapi_saturation"], cells[0]["flag_pnoc_saturation"]), (dapi_flag, pnoc_flag))
 
     def test_thresholds_same_nucleus_outside_and_exclusions(self):
         labels = np.zeros((12, 32), np.int32)
@@ -434,6 +490,69 @@ class IntegrationTests(unittest.TestCase):
             self.assertGreater((out / "annotated_overlay.pdf").stat().st_size, 0)
             legend = json.loads((out / "annotated_overlay_legend.json").read_text())
             self.assertEqual(legend["render_scale"], 2)
+
+    def test_readable_batch_exports_nested_scenes_and_sweeps(self):
+        xml = """<ImageDocument><Metadata><Information><Image><ComponentBitCount>16</ComponentBitCount>
+        <Dimensions><Channels><Channel Id="0" Name="Cy5-T1"><Fluor>Cy5</Fluor></Channel>
+        <Channel Id="1" Name="Cy3-T2"><Fluor>Cy3</Fluor></Channel><Channel Id="2" Name="At520-T3"><Fluor>At520</Fluor></Channel>
+        <Channel Id="3" Name="DAPI-T4"><Fluor>DAPI</Fluor></Channel></Channels></Dimensions></Image></Information>
+        <Scaling><Items><Distance Id="X"><Value>5e-07</Value></Distance><Distance Id="Y"><Value>5e-07</Value></Distance>
+        </Items></Scaling></Metadata></ImageDocument>"""
+        shape = (150, 150); centers = [(40, 40), (40, 105), (105, 75)]
+        y, x = np.indices(shape); mask = np.zeros(shape, bool)
+        for cy, cx in centers:
+            mask |= (y - cy) ** 2 + (x - cx) ** 2 <= 12 ** 2
+        image = np.zeros((4, *shape), np.uint16); image[3] = (100 + 5000 * mask).astype(np.uint16)
+        offsets = [(-4, -4), (-4, 4), (4, 0)]
+        image[2] = gaussian_spots(shape, [(cy + dy, cx + dx) for cy, cx in centers[:2] for dy, dx in offsets], noise=3)
+        image[0] = gaussian_spots(shape, [(centers[0][0] + dy, centers[0][1] + dx) for dy, dx in offsets], noise=3)
+
+        class FakeScene:
+            sizes, dims = {"S": 1, "C": 4, "Y": 150, "X": 150, "0": 1}, "SCYX0"
+
+            def asarray(self, maxworkers=None):
+                return image[None, ..., None]
+
+        class FakeCzi:
+            def __init__(self, path):
+                self.path = path
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def metadata(self):
+                return xml
+
+            scenes = {0: FakeScene(), 1: FakeScene()}
+
+        config = rn.load_profile(Path(rn.__file__).with_name("settings_legacy.json"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / "input" / "sub").mkdir(parents=True)
+            (root / "input" / "a.czi").write_bytes(b"a"); (root / "input" / "sub" / "b.CZI").write_bytes(b"b")
+            with patch.object(rn.czifile, "CziFile", FakeCzi):
+                self.assertEqual(rn.run_batch(root / "input", root / "out", config, recursive=True), 0)
+            out = root / "out"
+            with (out / "summary.csv").open() as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual([(r["file"], r["scene"], r["status"]) for r in rows],
+                             [("a.czi", "0", "ok"), ("a.czi", "1", "ok"), ("sub/b.CZI", "0", "ok"), ("sub/b.CZI", "1", "ok")])
+            batch = json.loads((out / "batch_summary.json").read_text())
+            self.assertEqual((batch["total_nuclei"], batch["cre_positive"], batch["double_positive"], batch["complete"]), (12, 4, 4, True))
+            manifest = json.loads((out / "run_manifest.json").read_text())
+            self.assertEqual([i["file"] for i in manifest["inputs"]], ["a.czi", "sub/b.CZI"])
+            scene = out / "images" / "sub" / "b.CZI" / "scene_1"
+            for name in ["nuclei.csv", "spots.csv", "nuclei_labels.tif", "metadata.json", "annotated_overlay.png", "qc_overview.png"]:
+                self.assertGreater((scene / name).stat().st_size, 0)
+            self.assertEqual(rn.analysis_root(scene), out.resolve())
+            import sweep_parameters as sweep
+            with patch.object(sweep, "plot_sweep"):
+                totals = sweep.run_sweep(out, root / "sweep", [0, 1], [2, 3])
+            self.assertEqual(len(totals), 8)
+            baseline = next(r for r in totals if (r["expand_um"], r["pnoc_min_spots"], r["cre_min_spots"]) == (0, 3, 3))
+            self.assertEqual((baseline["cre_positive"], baseline["double_positive"]), (4, 4))
 
     def test_bad_czi_continues_and_returns_failure(self):
         with tempfile.TemporaryDirectory() as directory:

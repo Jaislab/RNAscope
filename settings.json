@@ -59,7 +59,8 @@
     "stardist_probability_threshold": null,
     "min_dapi_contrast": 1.15,
     "contrast_ring_inner_um": 1.5,
-    "contrast_ring_outer_um": 3.5
+    "contrast_ring_outer_um": 3.5,
+    "contrast_smooth_um": 1.4
   },
   "spots": {
     "pnoc": {

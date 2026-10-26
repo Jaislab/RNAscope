@@ -58,8 +58,10 @@ coordinates. Physical masks and assignment distances account for anisotropy.
    sampling 0.69 µm/pixel. Its default probability threshold is used unless
    explicitly overridden. RNA channels do not determine the masks.
 2. Accept nuclei of 20–300 µm², excluding image-border objects and objects whose
-   smoothed DAPI mean is below 1.15 times the mean in an available 1.5–3.5 µm
-   surrounding ring. An unavailable ring is unknown, not grounds for rejection.
+   DAPI mean, smoothed at `nuclei.contrast_smooth_um` (1.4 µm, independent of
+   the StarDist preprocessing scale), is below 1.15 times the mean in an
+   available 1.5–3.5 µm surrounding ring. The same criterion applies to Cellpose
+   candidates. An unavailable ring is unknown, not grounds for rejection.
    Rejected candidates remain in the CSV and label image with their reasons.
 3. Use nuclear masks directly, or expand accepted masks by the configured
    radius with nearest-label assignment and no overlap. Pixels belonging to
@@ -75,6 +77,9 @@ StarDist is explicitly selected and never silently replaced by thresholding.
 The optional local-watershed backend uses local DAPI thresholding, watershed
 and solidity filtering. The historical profile uses Li/Otsu segmentation and
 multiscale, scale-normalized LoG responses with per-scale signed noise estimates.
+Each exported peak reports `sigma_um`/`response` from the scale with the maximal
+normalized response (a size estimate) and `detection_snr`/`detection_sigma_um`
+from the scale whose SNR triggered the detection; the two can differ.
 All profile parameters are saved with each run.
 
 ## Controls and quality limits
@@ -102,7 +107,8 @@ All QC reasons remain in `qc_flags` and separate boolean `flag_*` columns.
 gene cutoff, or saturated RNA for a gene whose count is below cutoff.
 `review_reasons` lists the actionable conditions. DAPI saturation, irregular
 shape, or a saturated RNA-positive object above cutoff remain informational
-unless a priority condition also applies. This is a triage rule, not a claim
+unless a priority condition also applies. DAPI saturation is evaluated inside
+the nuclear mask; RNA saturation and cluster flags inside the counting region. This is a triage rule, not a claim
 that other masks/classes cannot be wrong. Review all Cre-positive/Pnoc-below-
 cutoff objects in the dedicated pages, plus representative positives/negatives.
 
@@ -141,7 +147,10 @@ TLS verification. `KERAS_HOME` selects the cache; otherwise `.cache/keras/`
 beside the script is used. Models, input hashes, source hash, resolved profiles,
 dependency versions and numerical detector diagnostics are recorded. Decode
 and TensorFlow thread defaults are bounded; model tiling remains configurable
-through `nuclei.stardist_tiles` and is not selected automatically.
+through `nuclei.stardist_tiles` and is not selected automatically. The Cellpose
+worker inherits thread limits from the runner's environment and is bounded by
+`nuclei.cellpose_timeout_s`; CZI scaling entries without a usable value are
+treated as missing calibration.
 
 QC rendering works from 8-bit display copies of each channel and hands
 matplotlib only crop windows or block-reduced overview panels, so its memory

@@ -1,8 +1,8 @@
 # Cellpose second opinion on the reference image
 
 Cellpose was run on the same single-section `20X_L_CZI.czi`, with the original
-**≥3 detected puncta for each gene**. StarDist production settings remain
-unchanged. No method was selected by its coexpression percentage.
+**≥3 detected puncta for each gene**. StarDist was the production method when
+this comparison was run; its settings remain unchanged. No method was selected by its coexpression percentage.
 
 The runs show substantial segmentation disagreement. The Pnoc-guided estimates
 do **not yet support replacing the 2 µm counting region with validated whole-cell
@@ -14,7 +14,7 @@ review package is prepared so the differences can be assessed independently.
 - Cellpose **3.1.1.3**, using its requested legacy `nuclei` and `cyto3` models,
   with PyTorch 2.7.1 CPU. These are distinct from newer Cellpose-SAM models.
 - An isolated `.venv-cellpose` uses NumPy 2.0.2, required by this Cellpose release.
-  The production StarDist environment and dependency pins are preserved.
+  The StarDist environment and its dependency pins are preserved.
 - `nuclei`: DAPI alone, diameter 17 pixels. `cyto3`: DAPI alone at 17 pixels as
   a nuclear-object comparison, and Pnoc as the primary channel with DAPI as the
   auxiliary nuclear channel at 30 pixels for candidate cell outlines.
@@ -31,7 +31,7 @@ review package is prepared so the differences can be assessed independently.
 - Flow threshold 0.4, cell-probability threshold 0, minimum mask size 15 pixels,
   resampling enabled, no test-time augmentation, two CPU threads.
 - Nuclear acceptance uses the same 20–300 µm² size range, border exclusion and
-  DAPI-contrast criterion as the production profile. Cell outlines do not inherit
+  DAPI-contrast criterion as the StarDist profile. Cell outlines do not inherit
   the nuclear upper-area cutoff.
 - **All 1,209 Cre and 3,531 Pnoc detected peak coordinates are frozen** from the
   reference export. No peak threshold, saturation substitution or positivity
@@ -57,7 +57,7 @@ and has different coverage; its denominator is not the baseline population.
 
 | Method | Raw candidates | Accepted/eligible objects | Cre-positive | Double-positive | Double / Cre |
 |---|---:|---:|---:|---:|---:|
-| StarDist, production | 1,770 | 1,554 | 121 | 109 | **90.08%** |
+| StarDist (production profile at the time) | 1,770 | 1,554 | 121 | 109 | **90.08%** |
 | Cellpose `nuclei`, raw DAPI | 436 | 409 | 38 | 36 | 94.74% |
 | Cellpose `cyto3`, raw DAPI | 1,123 | 1,032 | 100 | 88 | 88.00% |
 | Cellpose `nuclei`, reference-preprocessed DAPI | 816 | 756 | 55 | 49 | 89.09% |
@@ -138,11 +138,11 @@ future training/generalization claim.
 No object-level accuracy comparison has been performed because annotations do
 not yet exist. Completed nuclear/cell instance masks, reviewed ROI and reviewer
 IDs are needed before that comparison can be made. Keep ≥3 puncta and the
-production profile while assessing these results.
+profile fixed while assessing these results.
 
 ## Reproduce the comparison
 
-Keep the production `.venv` for CZI export and comparison. Install Cellpose in
+Keep the main analysis `.venv` for CZI export and comparison. Install Cellpose in
 its own environment (tested on Linux CPU/Python 3.12):
 
 ```bash

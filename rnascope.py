@@ -48,6 +48,7 @@ DEFAULT_CONFIG = {
         "method": "watershed",
         "cellpose_diameter_px": 17.0,
         "cellpose_threads": 2,
+        "cellpose_timeout_s": 600.0,
         "threshold_method": "li",
         "smooth_sigma_um": 0.7,
         "background_sigma_um": 12.0,
@@ -73,6 +74,7 @@ DEFAULT_CONFIG = {
         "min_dapi_contrast": None,
         "contrast_ring_inner_um": 1.5,
         "contrast_ring_outer_um": 3.5,
+        "contrast_smooth_um": 1.4,
     },
     "spots": {
         "pnoc": {"method": "log", "sigma_um": [0.45, 0.7, 1.0], "background_sigma_um": 4.0,
@@ -99,7 +101,8 @@ NUCLEUS_FIELDS = ["file", "scene", "nucleus_id", "x_px", "y_px", "x_um", "y_um",
                   "pnoc_positive", "cre_positive", "classification", "needs_review", "review_priority", "review_reasons", "qc_flags",
                   *[f"flag_{name}" for name in QC_FLAG_NAMES]]
 SPOT_FIELDS = ["file", "scene", "gene", "spot_id", "x_px", "y_px", "x_um", "y_um",
-               "sigma_um", "response", "detection_snr", "contrast", "nucleus_id", "assignment_id", "counted", "qc_flags"]
+               "sigma_um", "response", "detection_snr", "detection_sigma_um", "contrast",
+               "nucleus_id", "assignment_id", "counted", "qc_flags"]
 COUNT_FIELDS = ["total_nuclei", "excluded_nuclei", "pnoc_positive", "cre_positive",
                 "double_positive", "pnoc_only", "cre_only", "neither", "nuclei_needing_review", "nuclei_cre_endpoint_review"]
 SUMMARY_FIELDS = ["file", "scene", "status", *COUNT_FIELDS,
@@ -156,6 +159,10 @@ def validate_config(config: dict) -> None:
                     raise ValueError("stardist_probability_threshold must be between 0 and 1")
         elif key == "cellpose_threads":
             number(value, "nuclei.cellpose_threads", integer=True)
+        elif key == "cellpose_diameter_px":
+            number(value, "nuclei.cellpose_diameter_px")
+            if not 3 <= value <= 500:
+                raise ValueError("nuclei.cellpose_diameter_px is a pixel value and must lie between 3 and 500")
         elif key == "stardist_model":
             if not isinstance(value, str) or not value:
                 raise ValueError("stardist_model must name a registered StarDist model")
@@ -251,7 +258,14 @@ def metadata_from_xml(xml: str):
     sizes = {}
     for n in root.findall(".//Scaling/Items/Distance"):
         if n.get("Id") in ["X", "Y"]:
-            sizes[n.get("Id")] = float(n.findtext("Value")) * 1e6
+            # A missing, empty or non-positive value leaves the axis unset, so the
+            # batch reports "Missing pixel size; supply pixel_size_um" instead of a TypeError.
+            try:
+                value = float(n.findtext("Value")) * 1e6
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0:
+                sizes[n.get("Id")] = value
     return channels, sizes
 
 
@@ -345,7 +359,7 @@ def preflight(config):
 
     if config["nuclei"]["method"] == "cellpose":
         try:
-            load_cellpose_model(config["nuclei"]["cellpose_threads"])
+            load_cellpose_model(config["nuclei"]["cellpose_threads"], config["nuclei"]["cellpose_timeout_s"])
         except Exception as exc:
             raise RuntimeError(f"Cellpose initialization failed before analysis: {exc}") from exc
 
@@ -360,8 +374,15 @@ class CellposeWorker:
     Every model.eval keyword argument travels to the worker as JSON; the worker
     echoes what it ran and this side refuses labels whose echo differs.
     """
-    def __init__(self, python, threads):
-        self.python, self.threads = python, threads
+    def __init__(self, python, threads, timeout=600.0):
+        self.python, self.threads, self.timeout = python, threads, timeout
+
+    def environment(self):
+        """Thread limits must reach the child before it imports NumPy, so set them here, not in the worker."""
+        env = dict(os.environ)
+        for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+            env.setdefault(name, str(self.threads))
+        return env
 
     def run(self, image=None, parameters=None):
         with tempfile.TemporaryDirectory(prefix="rnascope-cellpose-") as directory:
@@ -376,8 +397,12 @@ class CellposeWorker:
                 command += ["--input", str(folder / "input.npy"), "--output", str(folder / "labels.npy"),
                             "--parameters", str(folder / "parameters.json")]
             try:
-                result = subprocess.run(command, capture_output=True, text=True, timeout=600)
-            except (OSError, subprocess.TimeoutExpired) as exc:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=self.timeout,
+                                        env=self.environment())
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(f"Isolated Cellpose worker exceeded nuclei.cellpose_timeout_s={self.timeout:g}; "
+                                   "raise it for large scenes or slow weight downloads") from exc
+            except OSError as exc:
                 raise RuntimeError(f"Cannot run isolated Cellpose worker: {exc}") from exc
             if result.returncode:
                 raise RuntimeError(f"Isolated Cellpose worker failed: {result.stderr[-4000:]}")
@@ -395,11 +420,11 @@ class CellposeWorker:
             return labels, info
 
 
-def load_cellpose_model(threads):
+def load_cellpose_model(threads, timeout=600.0):
     python = os.environ.get("CELLPOSE_PYTHON", str(Path(__file__).resolve().parent / ".venv-cellpose" / "bin" / "python"))
-    key = (python, threads, os.environ.get("CELLPOSE_LOCAL_MODELS_PATH"))
+    key = (python, threads, timeout, os.environ.get("CELLPOSE_LOCAL_MODELS_PATH"))
     if key not in _CELLPOSE_MODELS:
-        worker = CellposeWorker(python, threads)
+        worker = CellposeWorker(python, threads, timeout)
         _, info = worker.run()
         _CELLPOSE_MODELS[key] = worker, info
     return _CELLPOSE_MODELS[key]
@@ -414,7 +439,7 @@ def cellpose_labels(image, spacing, config):
     # Avoid silently using a pixel diameter on anisotropic acquisitions.
     if not np.isclose(spacing[0], spacing[1], rtol=.01):
         raise ValueError("Cellpose currently requires square XY pixels (within 1%); resampling is not validated")
-    worker, _ = load_cellpose_model(config["cellpose_threads"])
+    worker, _ = load_cellpose_model(config["cellpose_threads"], config["cellpose_timeout_s"])
     labels, info = worker.run(image, cellpose_inference_parameters(config))
     # Record the echoed parameter set, not a second copy of the request.
     used = info["inference"]
@@ -530,7 +555,10 @@ def dapi_contrast_ratios(labels, image, spacing, config):
     ids = np.arange(1, int(labels.max()) + 1)
     if not len(ids):
         return {}
-    smooth = ndi.gaussian_filter(image.astype(np.float32), [config["stardist_smooth_um"] / p for p in spacing])
+    # contrast_smooth_um is method-neutral; saved configurations from before it
+    # existed fall back to the StarDist smoothing scale they were run with.
+    smooth_um = config.get("contrast_smooth_um", config["stardist_smooth_um"])
+    smooth = ndi.gaussian_filter(image.astype(np.float32), [smooth_um / p for p in spacing])
     near = segmentation.expand_labels(labels, config["contrast_ring_inner_um"], spacing=spacing)
     ring = segmentation.expand_labels(labels, config["contrast_ring_outer_um"], spacing=spacing)
     ring[near > 0] = 0
@@ -614,6 +642,11 @@ def detect_spots(image: np.ndarray, spacing, config: dict, saturation=None):
     scores = np.stack([(r - baseline) / noise for r, (baseline, noise) in zip(responses, scale_stats)])
     scores[stack < config["min_response"]] = -np.inf
     score = np.max(scores, axis=0)
+    # Two scales are exported deliberately: detection_sigma_um is the scale whose
+    # SNR triggered the peak (it tracks noise suppression, not size), while
+    # sigma_um/response keep the scale-selection size estimate (maximal
+    # scale-normalized response) used by earlier exports.
+    detection_scale = np.argmax(scores, axis=0)
     best_scale = np.argmax(stack, axis=0)
     response = np.max(stack, axis=0)
     # A truncated filter footprint cannot establish a spot's shape at an edge.
@@ -641,6 +674,7 @@ def detect_spots(image: np.ndarray, spacing, config: dict, saturation=None):
                       "x_um": float(x * spacing[1]), "y_um": float(y * spacing[0]),
                       "sigma_um": config["sigma_um"][int(best_scale[y, x])],
                       "response": float(response[y, x]), "detection_snr": float(score[y, x]),
+                      "detection_sigma_um": config["sigma_um"][int(detection_scale[y, x])],
                       "contrast": float(residual[y, x]),
                       "qc_flags": ";".join(flags)})
     diagnostics = {"method": "log", "snr_threshold": config["snr_threshold"],
@@ -684,7 +718,7 @@ def detect_intensity_spots(image, spacing, config, saturation=None):
         spots.append({"spot_id": len(spots) + 1, "x_px": int(x), "y_px": int(y),
                       "x_um": float(x * spacing[1]), "y_um": float(y * spacing[0]),
                       "sigma_um": None, "response": float(smooth[y, x]),
-                      "detection_snr": float((smooth[y, x] - baseline) / noise),
+                      "detection_snr": float((smooth[y, x] - baseline) / noise), "detection_sigma_um": None,
                       "contrast": float(residual[y, x]), "qc_flags": ";".join(flags)})
     return spots, {"method": "intensity", "response_threshold": threshold, "noise_mad": noise,
                    "detected_spots": len(spots), "saturation_value": saturation,
@@ -725,7 +759,9 @@ def assign_and_classify(labels, nuclei, spots_by_gene, config, review_masks=None
                 if "saturated_signal" in spot["qc_flags"].split(";"):
                     flags[owner].add(f"{gene}_saturation")
     for key, mask in (review_masks or {}).items():
-        for label in np.unique(assignment_labels[mask]):
+        # DAPI masks describe the nucleus itself; RNA masks describe the counting region.
+        region = labels if key.startswith("dapi") else assignment_labels
+        for label in np.unique(region[mask]):
             if label:
                 flags[int(label)].add(key)
     for n in nuclei:
@@ -1123,6 +1159,7 @@ def analyze_scene(image, spacing, config, channel_metadata, out, source, scene):
                                        "spot_detection": detection_info,
                                        "assignment": {"expand_um": expand_um, "blocked_excluded_nuclei": True},
                       "review_policy": "accepted objects within +/-1 peak of either cutoff, or saturated RNA below that gene cutoff; other flags informational",
+                      "flag_regions": "dapi_* flags are evaluated inside the nuclear mask; RNA saturation/cluster flags inside the counting region",
                       "review_priority_policy": "cre_endpoint: queued Cre-positive objects; general: other queued objects; none: not queued; triage does not alter expression calls",
                       "coordinate_origin": "top-left of reconstructed scene; x=column, y=row"}
     tifffile.imwrite(out / "nuclei_labels.tif", labels.astype(np.uint32), photometric="minisblack",
