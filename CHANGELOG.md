@@ -22,6 +22,9 @@
 - Add a GitHub Actions workflow running the unit suite, a batch test through
   the reader interface with nested inputs and a sweep of its exports, and
   refresh wording that still described StarDist as the production method.
+- Reorganize the README around status, installation, running, Cellpose
+  settings, outputs and review; document the main profile and the two-environment
+  design in METHODS.md and VALIDATION.md; remove stale test counts.
 
 ### Audit round four: QC rendering cost
 

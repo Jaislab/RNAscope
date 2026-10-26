@@ -51,35 +51,65 @@ X/Y sampling comes from CZI scaling metadata. Missing calibration requires
 Coordinates are local to the scene's top-left (x=column, y=row), not stage
 coordinates. Physical masks and assignment distances account for anisotropy.
 
-## StarDist profiles
+## Analysis steps
 
-1. Smooth DAPI at 1.4 µm, normalize and apply CLAHE with a 25 µm window and
-   clip 0.01. StarDist `2D_versatile_fluo` predicts nucleus outlines at target
-   sampling 0.69 µm/pixel. Its default probability threshold is used unless
-   explicitly overridden. RNA channels do not determine the masks.
-2. Accept nuclei of 20–300 µm², excluding image-border objects and objects whose
-   DAPI mean, smoothed at `nuclei.contrast_smooth_um` (1.4 µm, independent of
-   the StarDist preprocessing scale), is below 1.15 times the mean in an
-   available 1.5–3.5 µm surrounding ring. The same criterion applies to Cellpose
-   candidates. An unavailable ring is unknown, not grounds for rejection.
-   Rejected candidates remain in the CSV and label image with their reasons.
-3. Use nuclear masks directly, or expand accepted masks by the configured
-   radius with nearest-label assignment and no overlap. Pixels belonging to
-   rejected DAPI objects are blocked. The 2 µm expansion is an approximate
-   nucleus-associated region and can include another cell's cytoplasm/processes.
-4. Independently remove each RNA channel's morphological background at an 8 µm
-   radius, smooth at about 0.55 µm, and detect intensity maxima above median plus
-   10 × robust noise (`1.4826 × MAD`). Minimum separation uses a 1 µm footprint.
-5. Count peak centers strictly inside each selected region and apply the
-   per-gene ≥3 criterion. Preserve nuclear counts alongside expanded counts.
+### 1. Nuclear segmentation
 
-StarDist is explicitly selected and never silently replaced by thresholding.
-The optional local-watershed backend uses local DAPI thresholding, watershed
-and solidity filtering. The historical profile uses Li/Otsu segmentation and
-multiscale, scale-normalized LoG responses with per-scale signed noise estimates.
-Each exported peak reports `sigma_um`/`response` from the scale with the maximal
-normalized response (a size estimate) and `detection_snr`/`detection_sigma_um`
-from the scale whose SNR triggered the detection; the two can differ.
+RNA channels never determine the masks. The method is selected explicitly by
+the profile and is never replaced silently; a missing model or environment
+aborts the run during preflight.
+
+- **Cellpose `nuclei` (main profile).** Raw DAPI is handed, as a numeric NPY
+  array, to an isolated subprocess running pinned Cellpose 3.1.1.3 on CPU with
+  the legacy `nuclei` weights (SHA-256 verified before loading). The model
+  receives an exact 17-pixel diameter, its own 1st/99th-percentile
+  normalization, flow threshold 0.4, cell-probability threshold 0, minimum mask
+  size 15 pixels, resampling and no augmentation. The worker echoes the keyword
+  set it ran; masks whose echo differs from the request are refused. Square XY
+  sampling is required.
+- **StarDist `2D_versatile_fluo` (historical profiles).** Smooth DAPI at 1.4 µm,
+  normalize to the 1st/99.8th percentiles and apply CLAHE with a 25 µm window
+  and clip 0.01. StarDist predicts outlines at a target sampling of
+  0.69 µm/pixel with its default probability threshold unless overridden.
+- **Watershed (legacy profile).** Li or Otsu threshold of background-corrected
+  DAPI, enclosed-hole filling, distance-transform seeds at a 3 µm minimum
+  separation and watershed splitting. An optional local-watershed backend uses
+  local thresholding and solidity filtering.
+
+### 2. Acceptance
+
+Accept candidates of 20–300 µm² (15–250 µm² in the legacy profile), excluding
+image-border objects and, where `min_dapi_contrast` is set, objects whose DAPI
+mean, smoothed at `nuclei.contrast_smooth_um` (1.4 µm, independent of the
+StarDist preprocessing scale), is below 1.15 times the mean in an available
+1.5–3.5 µm surrounding ring. An unavailable ring is unknown, not grounds for
+rejection. Rejected candidates remain in the CSV and label image with their
+reasons and never enter summary totals.
+
+### 3. Counting region
+
+Use nuclear masks directly, or expand accepted masks by the configured radius
+with nearest-label assignment and no overlap. Pixels belonging to rejected DAPI
+objects are blocked. The 2 µm expansion is an approximate nucleus-associated
+region and can include another cell's cytoplasm or processes.
+
+### 4. RNA peak detection
+
+The shipped Cellpose and StarDist profiles independently remove each RNA
+channel's morphological background at an 8 µm radius, smooth at about 0.55 µm,
+and detect intensity maxima above the median plus 10 × robust noise
+(`1.4826 × MAD`), with a 1 µm minimum separation. The legacy profile instead
+uses multiscale, scale-normalized LoG responses with per-scale signed noise
+estimates; each exported peak reports `sigma_um`/`response` from the scale with
+the maximal normalized response (a size estimate) and
+`detection_snr`/`detection_sigma_um` from the scale whose SNR triggered the
+detection, and the two can differ. Peaks within three filter widths of the
+image edge are not reported by the LoG detector.
+
+### 5. Classification
+
+Count peak centers strictly inside each selected region and apply the
+per-gene ≥3 criterion. Nuclear counts are preserved alongside expanded counts.
 All profile parameters are saved with each run.
 
 ## Controls and quality limits
@@ -133,9 +163,14 @@ contribution to an accepted object. Excluded objects never enter summary totals.
 
 ## Runtime and reproducibility
 
-The pinned StarDist environment was tested on Linux CPU and Python 3.12.
+The main workflow uses two pinned environments on Linux CPU with Python 3.12:
+the analysis environment (`requirements-lock.txt`, NumPy ≥2.1 for the CZI
+reader) and the Cellpose environment (`requirements-cellpose.txt`, NumPy <2.1),
+connected through numeric NPY files and a JSON parameter/metadata exchange.
+The unit suite also passes on Python 3.13 in the analysis environment. The
+historical StarDist environment was tested on Linux CPU and Python 3.12.
 Windows and Apple-silicon macOS have not been validated here. The pinned
-TensorFlow 2.21 dependency has no Intel-macOS wheel, so this environment is not
+TensorFlow 2.21 dependency has no Intel-macOS wheel, so that environment is not
 an installation target for Intel Macs.
 Compatible TensorFlow installations may use different distribution names;
 version recording falls back to the imported module's version and then

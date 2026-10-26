@@ -22,7 +22,7 @@ channels, with X/Y sampling 0.690535481770835 µm/pixel. The source CZI and runt
 outputs are not distributed with this repository. The numerical examples are
 reference checks, not a public regression dataset or manual accuracy benchmark.
 
-Both current profiles use identical StarDist/CLAHE nuclear segmentation and
+The two StarDist profiles use identical StarDist/CLAHE nuclear segmentation and
 intensity-peak detection, with an independent ≥3 peak criterion for each gene.
 Only the assignment radius differs. The supplied parameter files reproduce the
 following reference results:
@@ -97,16 +97,21 @@ biological ground truth. The earlier watershed/LoG result is documented in
 
 ## Software evidence
 
-All **40 tests pass** in the tested Python 3.12/Linux environment. Tests cover
-known peaks and background noise, explicit profiles, every shipped JSON, default
-profile export, missing distribution metadata, early environment failure,
-production-profile exports with mocked nucleus inference, thresholds, region
-assignment, excluded-object blocking, percentages, failures and file outputs.
-New tests separate priority and informational flags, exercise component-bit
-saturation, verify ImageJ calibration and exact IDs at dtype boundaries, and
-check that the annotated overlay retains at least native image resolution.
-Cre-endpoint triage is tested for both genes' cutoffs, custom thresholds,
-saturation below cutoff, excluded objects, ordering, summary counts and export.
+The unit suite (63 tests at audit round four) passes on Linux with Python 3.12
+and 3.13 in the analysis environment and runs on every push through GitHub
+Actions. It covers known peaks and background noise, explicit profiles, every
+shipped JSON, default profile export, missing distribution metadata, early
+environment failure, shipped-profile exports with mocked nucleus inference,
+thresholds, region assignment, excluded-object blocking, percentages, failures
+and file outputs; priority versus informational flags, component-bit
+saturation, ImageJ calibration and exact IDs at dtype boundaries, the annotated
+overlay at native resolution or better; Cre-endpoint triage for both genes'
+cutoffs, custom thresholds, saturation below cutoff, excluded objects, ordering,
+summary counts and export; a complete batch through the reader interface with
+nested input folders followed by a sweep of its exports; and the Cellpose
+worker contract (parameter echo, weight fingerprint, timeout and thread limits)
+with mocked inference. `tests/smoke_cellpose.py` additionally runs real Cellpose
+inference on synthetic nuclei in the Cellpose environment.
 
 Actual CPU inference with official `2D_versatile_fluo` weights was executed on
 the reference CZI. Registered archive checksum and TLS verification were
@@ -123,8 +128,8 @@ actual installation test of every alternative TensorFlow package or platform.
 Exported spot IDs/counts were checked against saved nuclear and assignment
 labels. The expanded masks respect the 2 µm distance limit and rejected-object
 blocking. Script hashes in the run manifests match the source used. Active
-methods/radius are printed and recorded; missing `--config` now fails before
-analysis, instead of selecting historical parameters.
+methods/radius are printed and recorded; a missing `--config` fails before
+analysis instead of selecting historical parameters.
 
 ## Experimental work still needed
 
@@ -182,7 +187,7 @@ dedicated review pages. No queue/tier flag changes a cell's automated class.
 The subsequent [324-setting sweep](docs/SENSITIVITY.md) reuses these exported
 masks and peaks while changing independent per-gene cutoffs (≥1–6) and counting
 radius (0–4 µm). It reproduces baseline per-object and summary counts before
-comparisons, preserves the production settings and reports numerator/denominator
+comparisons, leaves the shipped profiles unchanged and reports numerator/denominator
 counts plus a fixed baseline Cre group. Four additional tests cover sweep
 behavior and multi-scene aggregation. Higher fractions are not taken as proof
 of more accurate segmentation or positivity thresholds.
@@ -194,5 +199,26 @@ CPU model/input variants, their method-agreement statistics and cell-region
 coverage. All use the original ≥3 cutoffs and frozen peak detections. Baseline
 StarDist counts reproduce. A blinded eight-tile review package is prepared;
 expert object-level labels have not been supplied and no accuracy winner is
-claimed. Production masks/settings remain unchanged. Six additional tests
-cover comparison logic and blinded-package behavior.
+claimed. Shipped profiles remain unchanged. Six additional tests cover
+comparison logic and blinded-package behavior.
+
+## Cellpose main profile (v0.3.0)
+
+`settings_cellpose.json` runs the pinned legacy Cellpose 3.1.1.3 `nuclei` model
+on raw DAPI with an exact 17-pixel diameter, then the same acceptance filters,
+2 µm assignment, intensity-peak detection and ≥3 criteria as the StarDist
++2 µm profile. On `20X_L_CZI.czi` it reproduces the counts recorded during the
+Cellpose comparison: 409 accepted nuclei, 89 Pnoc-positive, 38 Cre-positive
+and 36 double-positive objects (94.74% of Cre-positive objects). An earlier
+profile that passed the diameter as a rounded 11.74 µm caused a 1024→1023
+pixel internal resize and produced 401/80/38/34 (89.47%); RNA peak coordinates
+and responses were identical between those controlled runs, so the difference
+came from segmentation alone.
+
+This object count is **unvalidated against expert labels**. Against the 1,554
+accepted StarDist nuclei, 124 match a Cellpose object at IoU ≥ 0.5 (median
+matched IoU 0.57) and 285 of the 409 Cellpose objects match no StarDist nucleus.
+The blinded review package has not been scored, so neither method is known to
+be closer to the true nuclei, and the higher percentage rests on 38 objects.
+Scene metadata records the echoed inference parameters, the loaded-weight
+fingerprint and package versions; run manifests record both script hashes.

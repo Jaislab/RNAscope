@@ -70,12 +70,14 @@ counts. The new tiers only change review order and add output columns/files.
 
 ## Remaining work and project decisions
 
-- CI across operating systems and a distributable regression dataset remain
-  portability/reproducibility work. Cross-platform installs are not claimed tested.
+- A GitHub Actions workflow runs the unit suite on Linux/Python 3.12. CI on
+  other operating systems and a distributable regression dataset remain
+  portability/reproducibility work; cross-platform installs are not claimed tested.
 - License and citation metadata require the owner's license/attribution choice;
   this update does not select a license or invent citation details.
-- Thread counts remain bounded and fixed, with explicit configurable model tiles.
-  Exposing thread settings or selecting tiles automatically is future performance work.
+- Cellpose threads and the worker timeout are profile settings; StarDist thread
+  counts remain fixed, with explicit configurable model tiles. Automatic tile
+  selection is future performance work.
 - Optional Z-stack projection, shifted-spot/ring-sweep chance controls, and
   saturated-area count estimates introduce additional analytical methods and
   require separate validation. A projection can combine different depths.

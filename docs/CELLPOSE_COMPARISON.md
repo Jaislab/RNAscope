@@ -174,8 +174,9 @@ manifests are exported. Source CZI images, model weights and generated reviewer
 packages are not distributed in the Git repository. This optional workflow
 currently requires square XY sampling and a single optical section.
 
-All **40 tests pass**, including channel ordering, one-to-one matching under
-splits/merges, sparse IDs, filtered masks, ambiguous cell links, and blinded
-package separation. Actual CPU inference on this reference image was run for
+The unit suite covers channel ordering, one-to-one matching under
+splits/merges, sparse IDs, filtered masks, ambiguous cell links, run-root
+discovery for nested scene folders, the csbdeep-free preprocessing control and
+blinded package separation. Actual CPU inference on this reference image was run for
 all five Cellpose variants. Passing tests establish software behavior, not
 biological accuracy.
