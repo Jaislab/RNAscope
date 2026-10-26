@@ -1,3 +1,14 @@
+## Audit round four: QC rendering cost
+
+- Render QC outputs from 8-bit display copies: the annotated overlay PNG is
+  drawn with Pillow at the same render scale as before, the PDF embeds the
+  native-resolution raster unresampled and keeps IDs/markers as vector
+  elements, review crops hand matplotlib only the crop window, overview panels
+  are block-reduced to their rendered size, and closed figures are collected
+  immediately. On a 2048 x 2048 synthetic scene, rendering fell from about 45 s
+  and 2.2 GB peak to 23 s and 0.2 GB; the full scene from 47 s / 2.4 GB RSS to
+  27 s / 0.6 GB. Analysis arrays, counts and the exported file set are unchanged.
+
 ## Audit round four: inference provenance and comparison tooling
 
 - Define the fixed Cellpose `model.eval` keyword set once in `cellpose_backend.py`.

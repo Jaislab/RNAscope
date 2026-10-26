@@ -391,6 +391,50 @@ class IntegrationTests(unittest.TestCase):
                 numerator, denominator = tif.pages[0].tags["XResolution"].value
                 self.assertAlmostEqual(10000 * denominator / numerator, 0.5)
 
+    def test_qc_rendering_helpers_preserve_coordinates_and_pixels(self):
+        a = np.arange(5 * 7, dtype=np.uint8).reshape(5, 7)
+        self.assertIs(rn.reduce_block(a, 1), a)
+        mean = rn.reduce_block(a, 2, "mean")
+        self.assertEqual(mean.shape, (2, 3)); self.assertEqual(mean.dtype, np.uint8)
+        self.assertEqual(int(mean[0, 0]), round((0 + 1 + 7 + 8) / 4))
+        np.testing.assert_array_equal(rn.reduce_block(a, 2, "max")[0], [8, 10, 12])
+        np.testing.assert_array_equal(rn.reduce_block(a, 2, "nearest")[0], [0, 2, 4])
+        rgba = np.zeros((4, 4, 4), np.uint8); rgba[1, 1] = [255, 0, 0, 255]
+        self.assertEqual(tuple(rn.reduce_block(rgba, 2, "max")[0, 0]), (255, 0, 0, 255))
+        self.assertEqual(rn.reduced_extent((5, 7), 2), (-0.5, 5.5, 3.5, -0.5))
+        self.assertEqual(rn.overview_reduction((1024, 1024)), 1)
+        self.assertEqual(rn.overview_reduction((2048, 1024)), 2)
+        rgb = np.full((2, 2, 3), 100, np.uint8)
+        overlay = np.zeros((2, 2, 4), np.uint8); overlay[0, 0] = [255, 255, 255, 255]; overlay[1, 1] = [0, 255, 255, 128]
+        blended = rn.blend_overlay(rgb, overlay)
+        self.assertEqual(tuple(blended[0, 0]), (255, 255, 255))
+        self.assertEqual(tuple(blended[0, 1]), (100, 100, 100))
+        self.assertEqual(tuple(blended[1, 1]), (50, 178, 178))
+        self.assertEqual(int(rgb[0, 0, 0]), 100)  # input untouched
+        extent, window, window_extent = rn.crop_window(10.4, 3.0, 8.0, (0.5, 0.5), (20, 30))
+        np.testing.assert_allclose(extent, [2.4, 18.4, 0, 11.0])
+        self.assertEqual((window[0].start, window[0].stop, window[1].start, window[1].stop), (0, 12, 2, 20))
+        self.assertEqual(window_extent, (1.5, 19.5, 11.5, -0.5))
+
+    def test_annotated_overlay_is_raster_at_render_scale_with_vector_pdf(self):
+        rgb = np.zeros((30, 40, 3), np.uint8)
+        overlay = np.zeros((30, 40, 4), np.uint8); overlay[10, :] = [255, 255, 255, 255]
+        nuclei = [{"nucleus_id": 7, "accepted": True, "classification": "double_positive", "x_px": 20.0, "y_px": 15.0}]
+        spots = {"pnoc": [{"x_px": 5, "y_px": 5, "counted": True}], "cre": [{"x_px": 30, "y_px": 25, "counted": False}]}
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            rn.save_annotated_overlay(out, rgb, overlay, nuclei, spots)
+            from PIL import Image
+            with Image.open(out / "annotated_overlay.png") as png:
+                self.assertEqual((png.width, png.height), (80, 60))  # 2x below 2048 px
+                pixels = np.asarray(png.convert("RGB"))
+            self.assertEqual(tuple(pixels[20, 2]), (255, 255, 255))  # nuclear boundary row at 2x
+            self.assertEqual(tuple(pixels[2, 2]), (0, 0, 0))
+            self.assertTrue(np.any(np.all(pixels[25:35, 30:50] == [255, 225, 74], axis=-1)))  # ID text in class colour
+            self.assertGreater((out / "annotated_overlay.pdf").stat().st_size, 0)
+            legend = json.loads((out / "annotated_overlay_legend.json").read_text())
+            self.assertEqual(legend["render_scale"], 2)
+
     def test_bad_czi_continues_and_returns_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

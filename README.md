@@ -159,11 +159,16 @@ percentage enters the algorithm. See [methods](docs/METHODS.md) and
 - `spots.csv`, `nuclei_labels.tif`, and optionally `assignment_labels.tif`:
   individual detections and their exact assignments.
 - `annotated_overlay.png` / `.pdf`: a single full-image overlay at at least
-  native resolution, with accepted nucleus IDs matching the CSV. The PDF labels
-  remain zoomable; `annotated_overlay_legend.json` explains colors and IDs.
+  native resolution, with accepted nucleus IDs matching the CSV. The PNG is a
+  raster with IDs drawn into the pixels; the PDF embeds the native-resolution
+  image with vector, zoomable labels. `annotated_overlay_legend.json` explains
+  colors and IDs.
 - `nuclei_labels_imagej.tif` / `assignment_labels_imagej.tif`: Fiji/ImageJ
   companion masks calibrated directly in µm, with unchanged IDs.
 - `qc_overview.png`, `review_crops.png`: nucleus/region boundaries and detections.
+  Overview panels of scenes larger than about 1200 pixels are block-averaged to
+  the panel size; crops and overlays use full-resolution pixels. All QC images
+  use 8-bit display scaling; analysis uses the original intensities.
 - `cre_only_review.csv` / `.pdf` / PNG pages: every accepted Cre-positive object
   below the Pnoc cutoff. Review these for missed signal, background and saturation.
 - `config_used.json`, `run_manifest.json`, `metadata.json`, `run.log`: parameters,

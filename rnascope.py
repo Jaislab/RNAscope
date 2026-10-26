@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import gc
 from datetime import datetime, timezone
 import hashlib
 import importlib
@@ -797,6 +798,61 @@ def display_scale(image):
     return np.clip((image.astype(np.float32) - lo) / max(float(hi - lo), 1), 0, 1)
 
 
+def display_uint8(image):
+    """8-bit display mapping (1st-99.7th percentile stretch) for QC rendering only; analysis never uses it."""
+    return (display_scale(image) * 255 + 0.5).astype(np.uint8)
+
+
+OVERVIEW_PANEL_PX = 1200
+
+
+def overview_reduction(shape, budget=OVERVIEW_PANEL_PX):
+    """Integer block factor that keeps overview panels near their rendered size; 1 leaves data untouched."""
+    return max(1, math.ceil(max(shape[:2]) / budget))
+
+
+def reduce_block(array, factor, how="mean"):
+    """Reduce an image by integer blocks for overview panels only.
+
+    ``mean`` for intensities, ``max`` for thin boundary overlays, ``nearest``
+    for label-derived colour maps. The remainder below one block is cropped;
+    callers pass ``reduced_extent`` to imshow so coordinates stay in full-image pixels.
+    """
+    if factor <= 1:
+        return array
+    h, w = (array.shape[0] // factor) * factor, (array.shape[1] // factor) * factor
+    blocks = array[:h, :w].reshape(h // factor, factor, w // factor, factor, *array.shape[2:])
+    if how == "mean":
+        return (blocks.mean(axis=(1, 3)) + 0.5).astype(array.dtype)
+    if how == "max":
+        return blocks.max(axis=(1, 3))
+    return array[:h:factor, :w:factor]
+
+
+def reduced_extent(shape, factor):
+    """imshow extent that places block-reduced pixels on the full-image pixel grid."""
+    h, w = (shape[0] // factor) * factor, (shape[1] // factor) * factor
+    return (-0.5, w - 0.5, h - 0.5, -0.5)
+
+
+def blend_overlay(rgb, overlay):
+    """Alpha-composite a uint8 RGBA overlay onto a uint8 RGB image, touching overlay pixels only."""
+    mask = overlay[..., 3] > 0
+    out = rgb.copy()
+    alpha = overlay[mask, 3:4].astype(np.float32) / 255
+    out[mask] = (rgb[mask] * (1 - alpha) + overlay[mask, :3] * alpha + 0.5).astype(np.uint8)
+    return out
+
+
+def crop_window(x, y, crop_um, spacing, shape):
+    """Float view limits (as before) plus the integer pixel slice that covers them."""
+    half_x, half_y = crop_um / spacing[1] / 2, crop_um / spacing[0] / 2
+    extent = [max(0, x - half_x), min(shape[1] - 1, x + half_x), max(0, y - half_y), min(shape[0] - 1, y + half_y)]
+    x0, x1 = int(math.floor(extent[0])), min(shape[1], int(math.ceil(extent[1])) + 1)
+    y0, y1 = int(math.floor(extent[2])), min(shape[0], int(math.ceil(extent[3])) + 1)
+    return extent, np.s_[y0:y1, x0:x1], (x0 - 0.5, x1 - 0.5, y1 - 0.5, y0 - 0.5)
+
+
 def write_imagej_labels(path, labels, spacing):
     """Lossless Fiji companion: ImageJ accepts uint16 or float32, not uint32."""
     maximum = int(labels.max(initial=0))
@@ -809,15 +865,44 @@ def write_imagej_labels(path, labels, spacing):
     return {"written": True, "dtype": str(data.dtype), "unit": "um"}
 
 
-def save_annotated_overlay(out, rgb, boundaries, nuclei, spots):
+def save_annotated_overlay(out, rgb, overlay, nuclei, spots):
+    """Full-image overlay: a PIL raster PNG at >= native resolution and a PDF with vector IDs/markers.
+
+    The PDF embeds the composite unresampled (``interpolation="none"``), so its
+    size and memory follow the native pixel count rather than the render dpi.
+    """
     import matplotlib.pyplot as plt
     from matplotlib import patheffects
+    from PIL import Image, ImageDraw, ImageFont
     height, width = rgb.shape[:2]
     scale = 2 if max(height, width) < 2048 else 1
+    composite = blend_overlay(rgb, overlay)
+    raster = Image.fromarray(composite)
+    if scale > 1:
+        raster = raster.resize((width * scale, height * scale), Image.NEAREST)
+    draw = ImageDraw.Draw(raster)
+    radius = 1.5 * scale
+    for gene, color in [("pnoc", (0, 255, 0)), ("cre", (255, 85, 136))]:
+        for s in spots[gene]:
+            if s["counted"]:
+                cx, cy = (s["x_px"] + 0.5) * scale, (s["y_px"] + 0.5) * scale
+                draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], outline=color, width=1)
+    try:
+        font = ImageFont.load_default(size=8 * scale)
+        text_style = {"anchor": "mm", "stroke_width": 1, "stroke_fill": "black"}
+    except (ImportError, OSError, TypeError):
+        # Pillow without FreeType: bitmap font, no halo or centring.
+        font, text_style = ImageFont.load_default(), {}
+    for n in nuclei:
+        if n["accepted"]:
+            draw.text(((n["x_px"] + 0.5) * scale, (n["y_px"] + 0.5) * scale), str(n["nucleus_id"]),
+                      fill=COLORS[n["classification"]], font=font, **text_style)
+    raster.save(out / "annotated_overlay.png", compress_level=6)
+    del draw, raster
+
     fig = plt.figure(figsize=(width / 100, height / 100), dpi=100 * scale)
     ax = fig.add_axes([0, 0, 1, 1])
-    ax.imshow(rgb, interpolation="nearest")
-    ax.imshow(boundaries, interpolation="nearest")
+    ax.imshow(composite, interpolation="none")
     for gene, color in [("pnoc", "lime"), ("cre", "#ff5588")]:
         selected = [s for s in spots[gene] if s["counted"]]
         if selected:
@@ -829,10 +914,11 @@ def save_annotated_overlay(out, rgb, boundaries, nuclei, spots):
                     fontsize=6 / scale, ha="center", va="center",
                     path_effects=[patheffects.withStroke(linewidth=0.65, foreground="black")])
     ax.set_xlim(-0.5, width - 0.5); ax.set_ylim(height - 0.5, -0.5); ax.set_axis_off()
-    fig.savefig(out / "annotated_overlay.png", dpi=100 * scale)
     fig.savefig(out / "annotated_overlay.pdf", dpi=100 * scale)
-    plt.close(fig)
+    plt.close(fig); gc.collect()
     write_json(out / "annotated_overlay_legend.json", {"source_size_yx": [height, width], "render_scale": scale,
+               "png": "raster at render_scale x native resolution; IDs and markers drawn into the pixels",
+               "pdf": "native-resolution raster with vector (zoomable) IDs and markers",
                "IDs": "accepted nucleus_id values in nuclei.csv", "label_colors": COLORS,
                "channels": {"red": "Cre", "green": "Pnoc", "blue": "DAPI"},
                "boundaries": {"white": "nuclei", "cyan": "expanded assignment, when enabled"}})
@@ -847,25 +933,34 @@ def save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3_index=None
     from matplotlib.patches import Patch
     from matplotlib.colors import to_rgb
 
-    rgb = np.zeros((*labels.shape, 3), np.float32)
-    rgb[..., 0] = display_scale(image[channels["cre"]])
-    rgb[..., 1] = display_scale(image[channels["pnoc"]])
-    rgb[..., 2] = display_scale(image[channels["dapi"]])
-    palette = np.zeros((int(labels.max()) + 1, 3), np.float32)
+    # One 8-bit display copy per channel; every panel, crop and review page reuses these.
+    display = {role: display_uint8(image[index]) for role, index in channels.items()}
+    rgb = np.stack([display["cre"], display["pnoc"], display["dapi"]], axis=-1)
+    palette = np.zeros((int(labels.max()) + 1, 3), np.uint8)
     for n in nuclei:
-        palette[n["nucleus_id"]] = to_rgb(COLORS[n["classification"]])
+        palette[n["nucleus_id"]] = [int(round(255 * c)) for c in to_rgb(COLORS[n["classification"]])]
     class_rgb = palette[labels]
     boundary = segmentation.find_boundaries(labels, mode="inner")
-    overlay = np.zeros((*labels.shape, 4), np.float32)
-    overlay[boundary] = [1, 1, 1, 0.65]
+    overlay = np.zeros((*labels.shape, 4), np.uint8)
+    overlay[boundary] = [255, 255, 255, 166]
     if expand_um:
-        assignment_boundary = segmentation.find_boundaries(assignment_labels, mode="inner")
-        overlay[assignment_boundary] = [0, 1, 1, 0.7]
+        overlay[segmentation.find_boundaries(assignment_labels, mode="inner")] = [0, 255, 255, 179]
     save_annotated_overlay(out, rgb, overlay, nuclei, spots)
 
+    # Overview panels are rendered at a fixed canvas size, so block-reduce large
+    # scenes to that budget instead of handing full frames to matplotlib.
+    factor = overview_reduction(labels.shape)
+    extent_full = reduced_extent(labels.shape, factor)
+
     def draw(ax, extent=None):
-        ax.imshow(rgb)
-        ax.imshow(overlay)
+        if extent is None:
+            ax.imshow(reduce_block(rgb, factor, "mean"), extent=extent_full)
+            ax.imshow(reduce_block(overlay, factor, "max"), extent=extent_full)
+        else:
+            window, window_extent = extent[1], extent[2]
+            ax.imshow(rgb[window], extent=window_extent)
+            ax.imshow(overlay[window], extent=window_extent)
+            extent = extent[0]
         for gene, color in [("pnoc", "lime"), ("cre", "#ff5588")]:
             selected = [s for s in spots[gene] if s["counted"] and
                         (extent is None or extent[0] <= s["x_px"] <= extent[1] and extent[2] <= s["y_px"] <= extent[3])]
@@ -877,13 +972,13 @@ def save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3_index=None
         ax.set_axis_off()
 
     fig, axs = plt.subplots(2, 3, figsize=(16, 10))
-    axs[0, 0].imshow(image[channels["dapi"]], cmap="gray",
-                     vmin=np.percentile(image[channels["dapi"]], 1),
-                     vmax=np.percentile(image[channels["dapi"]], 99.7))
-    boundary_rgb = np.zeros((*labels.shape, 4)); boundary_rgb[boundary] = [1, 0.7, 0, 0.8]
-    axs[0, 0].imshow(boundary_rgb); axs[0, 0].set_title("DAPI and candidate nuclear boundaries")
+    axs[0, 0].imshow(reduce_block(display["dapi"], factor, "mean"), cmap="gray", vmin=0, vmax=255, extent=extent_full)
+    boundary_rgb = np.zeros((*labels.shape, 4), np.uint8); boundary_rgb[boundary] = [255, 179, 0, 204]
+    axs[0, 0].imshow(reduce_block(boundary_rgb, factor, "max"), extent=extent_full)
+    axs[0, 0].set_title("DAPI and candidate nuclear boundaries")
+    del boundary_rgb
     for ax, gene in [(axs[0, 1], "pnoc"), (axs[0, 2], "cre")]:
-        ax.imshow(display_scale(image[channels[gene]]), cmap="gray", vmin=0, vmax=1)
+        ax.imshow(reduce_block(display[gene], factor, "mean"), cmap="gray", vmin=0, vmax=255, extent=extent_full)
         for counted, color in [(False, "#888888"), (True, "lime" if gene == "pnoc" else "#ff5588")]:
             selected = [s for s in spots[gene] if s["counted"] == counted]
             if selected:
@@ -891,11 +986,14 @@ def save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3_index=None
                            s=5, facecolors="none", edgecolors=color, linewidths=0.4)
         ax.set_title(f"{gene}: detected spots (gray = not counted)")
     draw(axs[1, 0]); axs[1, 0].set_title("Cre red / Pnoc green / DAPI blue + counted spots")
-    axs[1, 1].imshow(class_rgb); axs[1, 1].set_title("Provisional nuclear classifications")
+    axs[1, 1].imshow(reduce_block(class_rgb, factor, "nearest"), extent=extent_full)
+    axs[1, 1].set_title("Provisional nuclear classifications")
     axs[1, 1].legend(handles=[Patch(color=c, label=k.replace("_", " ")) for k, c in COLORS.items()],
                      fontsize=7, loc="upper right")
+    del class_rgb
     if cy3_index is not None:
-        axs[1, 2].imshow(display_scale(image[cy3_index]), cmap="gray", vmin=0, vmax=1)
+        axs[1, 2].imshow(reduce_block(display_uint8(image[cy3_index]), factor, "mean"), cmap="gray", vmin=0, vmax=255,
+                         extent=extent_full)
         axs[1, 2].set_title("Cy3 reference: inspect shared bright artifacts")
     else:
         axs[1, 2].text(0.1, 0.5, "No Cy3 reference channel identified")
@@ -903,7 +1001,7 @@ def save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3_index=None
         ax.set_axis_off()
     region = f"Nuclei + {expand_um:g} µm (cyan assignment / white nuclear boundary)" if expand_um else "Nuclear-associated RNA only"
     fig.suptitle(region + " | display contrast adjusted; analysis uses original intensities")
-    fig.tight_layout(); fig.savefig(out / "qc_overview.png", dpi=160); plt.close(fig)
+    fig.tight_layout(); fig.savefig(out / "qc_overview.png", dpi=160); plt.close(fig); gc.collect()
 
     candidates = [n for n in nuclei if n["accepted"]]
     # Include each class, then prioritized ambiguous objects; deterministic selection.
@@ -920,21 +1018,20 @@ def save_qc(out, image, channels, labels, nuclei, spots, spacing, cy3_index=None
         fig, axs = plt.subplots(rows, columns, figsize=(4 * columns, 4.4 * rows), squeeze=False)
         for ax, n in zip(axs.flat, chosen):
             x, y = n["x_px"], n["y_px"]
-            extent = [max(0, x - crop_um / spacing[1] / 2), min(labels.shape[1] - 1, x + crop_um / spacing[1] / 2),
-                      max(0, y - crop_um / spacing[0] / 2), min(labels.shape[0] - 1, y + crop_um / spacing[0] / 2)]
-            draw(ax, extent)
+            # Only the crop window is handed to matplotlib; view limits are unchanged.
+            draw(ax, crop_window(x, y, crop_um, spacing, labels.shape))
             ax.text(x, y, str(n["nucleus_id"]), color="yellow", fontsize=9, ha="center")
             ax.set_title(f"ID {n['nucleus_id']} | Pnoc {n['pnoc_spots']} / Cre {n['cre_spots']}\n"
                          f"{n['classification']} | review: {n['review_priority']}", fontsize=9)
         for ax in list(axs.flat)[len(chosen):]:
             ax.set_axis_off()
-        fig.tight_layout(); fig.savefig(out / "review_crops.png", dpi=160); plt.close(fig)
+        fig.tight_layout(); fig.savefig(out / "review_crops.png", dpi=160); plt.close(fig); gc.collect()
         write_json(out / "review_crop_ids.json", [n["nucleus_id"] for n in chosen])
-    save_cre_only_audit(out, image, channels, labels, nuclei, spots, spacing,
+    save_cre_only_audit(out, display, rgb, labels, nuclei, spots, spacing,
                         assignment_labels if assignment_labels is not None else labels, expand_um, crop_um)
 
 
-def save_cre_only_audit(out, image, channels, labels, nuclei, spots, spacing, assignments, expand_um, crop_um):
+def save_cre_only_audit(out, display, rgb, labels, nuclei, spots, spacing, assignments, expand_um, crop_um):
     """Every accepted Cre+/Pnoc- object, not a selected sample of disagreements."""
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
@@ -942,8 +1039,6 @@ def save_cre_only_audit(out, image, channels, labels, nuclei, spots, spacing, as
     write_csv(out / "cre_only_review.csv", cells, NUCLEUS_FIELDS)
     if not cells:
         return
-    scaled = {g: display_scale(image[c]) for g, c in channels.items()}
-    rgb = np.stack([scaled["cre"], scaled["pnoc"], scaled["dapi"]], axis=-1)
     with PdfPages(out / "cre_only_review.pdf") as pdf:
         for page, start in enumerate(range(0, len(cells), 4), 1):
             group = cells[start:start + 4]
@@ -955,7 +1050,7 @@ def save_cre_only_audit(out, image, channels, labels, nuclei, spots, spacing, as
                 sl = np.s_[y0:y1, x0:x1]
                 for col, gene in enumerate(["dapi", "pnoc", "cre", "merge"]):
                     ax = axs[row, col]
-                    ax.imshow(rgb[sl] if gene == "merge" else scaled[gene][sl], cmap="gray", vmin=0, vmax=1,
+                    ax.imshow(rgb[sl] if gene == "merge" else display[gene][sl], cmap="gray", vmin=0, vmax=255,
                               interpolation="nearest")
                     for lab, color in [(labels, "yellow"), (assignments, "cyan")][:2 if expand_um else 1]:
                         mask = lab[sl] == n["nucleus_id"]
@@ -977,6 +1072,7 @@ def save_cre_only_audit(out, image, channels, labels, nuclei, spots, spacing, as
                          "Review segmentation, background peaks, saturation and near-threshold counts", fontsize=10)
             fig.tight_layout(rect=(0, 0, 1, 0.95))
             pdf.savefig(fig); fig.savefig(out / f"cre_only_review_{page:02d}.png", dpi=140); plt.close(fig)
+    gc.collect()
 
 
 def analyze_scene(image, spacing, config, channel_metadata, out, source, scene):

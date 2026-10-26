@@ -143,6 +143,12 @@ dependency versions and numerical detector diagnostics are recorded. Decode
 and TensorFlow thread defaults are bounded; model tiling remains configurable
 through `nuclei.stardist_tiles` and is not selected automatically.
 
+QC rendering works from 8-bit display copies of each channel and hands
+matplotlib only crop windows or block-reduced overview panels, so its memory
+follows the native pixel count modestly (about 0.2 GB peak for a 2048 x 2048
+scene) rather than dominating the analysis. Rendering never feeds back into
+segmentation, detection or counts.
+
 Corrupt/unsupported images produce failed summary rows and a nonzero batch
 exit, while remaining images continue. Verify completeness before using totals.
 Batch percentages use summed counts; zero denominators are NA/null. Overlapping
